@@ -1,0 +1,11 @@
+module: auth_agent
+config_class: auth_agent.AuthAgentsImplConfig
+pip_packages: []
+api_dependencies: 
+    - inference
+    - telemetry
+    - vector_io
+    - safety
+    - tool_runtime
+    - tool_groups
+optional_api_dependencies: []

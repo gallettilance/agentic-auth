@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Agentic Chat</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #f5f5f5;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e1e1e 0%, #2d2d30 100%);
+            border-bottom: 1px solid #404040;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .role-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .admin-role {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+        }
+        .user-role {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+        .nav-btn {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 14px;
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+            transition: all 0.3s ease;
+            margin-right: 10px;
+        }
+        .nav-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+        }
+        .logout-btn {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 14px;
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+            transition: all 0.3s ease;
+        }
+        .logout-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+        }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 800px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 0 20px;
+            min-height: 0;
+        }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 0;
+            scroll-behavior: smooth;
+        }
+        .message {
+            display: flex;
+            gap: 12px;
+            max-width: 70%;
+        }
+        .message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+        .message.assistant {
+            align-self: flex-start;
+        }
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        .message.user .message-avatar {
+            background: #4285f4;
+        }
+        .message.assistant .message-avatar {
+            background: #34a853;
+        }
+        .message-content {
+            background: linear-gradient(135deg, #2d2d30 0%, #3e3e42 100%);
+            padding: 16px 20px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #404040;
+            position: relative;
+            overflow: hidden;
+            color: #f5f5f5;
+        }
+        .message-content ul {
+            margin: 4px 0;
+            padding-left: 20px;
+        }
+        .message-content li {
+            margin: 0;
+            line-height: 1.2;
+        }
+        .message-content strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+        .message-content::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+        }
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .message.user .message-content::before {
+            background: linear-gradient(90deg, #ffffff 0%, #e3f2fd 100%);
+        }
+        .input-container {
+            background: linear-gradient(135deg, #1e1e1e 0%, #2d2d30 100%);
+            border-top: 1px solid #404040;
+            padding: 20px;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.3);
+            flex-shrink: 0;
+            position: sticky;
+            bottom: 0;
+            z-index: 10;
+        }
+        .input-form {
+            display: flex;
+            gap: 12px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #404040;
+            border-radius: 24px;
+            outline: none;
+            font-size: 16px;
+            background: #2d2d30;
+            color: #e0e0e0;
+            transition: all 0.3s ease;
+        }
+        .message-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+        .message-input::placeholder {
+            color: #888;
+        }
+        .send-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 24px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+        .send-btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .send-btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+        .authorization-error {
+            background: linear-gradient(135deg, #2a2a2e 0%, #35353a 100%);
+            border: 1px solid #4a4a4f;
+            border-radius: 6px;
+            padding: 8px;
+            margin: 6px 0;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+            color: #f5f5f5;
+            font-size: 11px;
+        }
+        .authorization-error::before {
+            content: '🔐';
+            position: absolute;
+            top: -3px;
+            right: -3px;
+            font-size: 20px;
+            opacity: 0.1;
+            transform: rotate(15deg);
+        }
+        .authorization-error .error-title {
+            font-weight: 600;
+            color: #ff8c82;
+            margin-bottom: 4px;
+            font-size: 12px;
+        }
+        .authorization-error .error-details {
+            color: #d4d4d8;
+            margin-bottom: 6px;
+            font-size: 11px;
+            line-height: 1.2;
+        }
+        .authorization-buttons {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .auth-btn {
+            background: linear-gradient(135deg, #3a3a42 0%, #4a4a52 100%);
+            color: #e0e0e0;
+            border: 1px solid #5a5a62;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+            transform: translateY(0);
+        }
+        .auth-btn:hover {
+            background: linear-gradient(135deg, #4a4a52 0%, #5a5a62 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+            border-color: #6a6a72;
+        }
+        .auth-btn:disabled {
+            background: linear-gradient(135deg, #2a2a2e 0%, #35353a 100%);
+            color: #888;
+            cursor: not-allowed;
+            transform: none;
+            border-color: #404040;
+            box-shadow: none;
+        }
+        .auth-btn.retry {
+            background: linear-gradient(135deg, #2d4a3e 0%, #3a5a4e 100%);
+            border-color: #4a6a5e;
+            color: #b8e6d0;
+        }
+        .auth-btn.retry:hover {
+            background: linear-gradient(135deg, #3a5a4e 0%, #4a6a5e 100%);
+            border-color: #5a7a6e;
+        }
+        .auth-btn.check-status {
+            background: linear-gradient(135deg, #2e3a4a 0%, #3e4a5a 100%);
+            border-color: #4e5a6a;
+            color: #b8d0e6;
+        }
+        .auth-btn.check-status:hover {
+            background: linear-gradient(135deg, #3e4a5a 0%, #4e5a6a 100%);
+            border-color: #5e6a7a;
+        }
+        .status-indicator {
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 500;
+            margin-left: 4px;
+        }
+        .status-pending {
+            background: linear-gradient(135deg, #4a3a2e 0%, #5a4a3e 100%);
+            color: #e6d0b8;
+            border: 1px solid #6a5a4e;
+        }
+        .status-approved {
+            background: linear-gradient(135deg, #2d4a3e 0%, #3a5a4e 100%);
+            color: #b8e6d0;
+            border: 1px solid #4a6a5e;
+        }
+        .status-denied {
+            background: linear-gradient(135deg, #4a2e2e 0%, #5a3e3e 100%);
+            color: #e6b8b8;
+            border: 1px solid #6a4e4e;
+        }
+        
+        .approval-status {
+            margin-top: 6px;
+            padding: 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            line-height: 1.2;
+        }
+        
+        .approval-status.success {
+            background: linear-gradient(135deg, #2d4a3e 0%, #3a5a4e 100%);
+            color: #b8e6d0;
+            border: 1px solid #4a6a5e;
+        }
+        
+        .approval-status.pending {
+            background: linear-gradient(135deg, #4a3a2e 0%, #5a4a3e 100%);
+            color: #e6d0b8;
+            border: 1px solid #6a5a4e;
+        }
+        
+        .approval-status.error {
+            background: linear-gradient(135deg, #4a2e2e 0%, #5a3e3e 100%);
+            color: #e6b8b8;
+            border: 1px solid #6a4e4e;
+        }
+        
+        .simple-auth-message {
+            background: linear-gradient(135deg, #2a2a2e 0%, #35353a 100%);
+            border: 1px solid #4a4a4f;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 6px 0;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+            color: #f5f5f5;
+            font-size: 12px;
+        }
+        
+        .simple-auth-message .auth-message {
+            font-weight: 600;
+            color: #ff8c82;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        
+        .simple-auth-message .auth-details {
+            color: #d4d4d8;
+            font-size: 11px;
+            line-height: 1.3;
+        }
+        
+        .simple-auth-message code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 11px;
+        }
+        .tool-calls {
+            background: linear-gradient(135deg, #2d2d30 0%, #404040 100%);
+            border: 1px solid #555;
+            border-radius: 16px;
+            padding: 16px;
+            margin: 12px 0;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }
+        .tool-calls .tool-call-header {
+            font-weight: bold;
+            color: white;
+            margin-bottom: 12px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .tool-call-item {
+            background: rgba(45, 45, 48, 0.95);
+            border-radius: 12px;
+            padding: 12px;
+            margin: 8px 0;
+            border-left: 4px solid #ff6b6b;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            color: #e0e0e0;
+        }
+        .tool-call-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+        .tool-call-item:nth-child(odd) {
+            border-left-color: #4ecdc4;
+        }
+        .tool-call-item:nth-child(even) {
+            border-left-color: #45b7d1;
+        }
+        .tool-call-name {
+            font-weight: bold;
+            color: #f0f0f0;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tool-call-name::before {
+            content: "⚡";
+            font-size: 16px;
+        }
+        .tool-call-args {
+            color: #b0b0b0;
+            font-size: 12px;
+            margin-top: 6px;
+            background: #1e1e1e;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #404040;
+        }
+        .formatted-response {
+            white-space: pre-wrap;
+            line-height: 1.6;
+            color: #f5f5f5;
+            font-weight: 400;
+            padding: 8px 0;
+        }
+        
+        /* Streaming-specific styles */
+        .tool-execution {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin: 8px 0;
+            display: inline-block;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .tool-execution code {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        }
+        
+        .auth-error-header {
+            background: linear-gradient(135deg, #8b4513 0%, #d2691e 100%);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin: 8px 0;
+            display: inline-block;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(210, 105, 30, 0.4);
+        }
+        
+        .auto-approval-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            border: none;
+            padding: 16px;
+            border-radius: 12px;
+            margin: 12px 0;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+            text-align: center;
+            color: white;
+        }
+        
+        .auto-approval-success .success-icon {
+            font-size: 2em;
+            margin-bottom: 8px;
+        }
+        
+        .auto-approval-success .success-message {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .auto-approval-success .retry-info {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+        
+        .tool-execution {
+            background: linear-gradient(135deg, #2d2d30 0%, #3e3e42 100%);
+            border: 1px solid #404040;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            font-size: 14px;
+            color: #e0e0e0;
+        }
+        
+        .tool-execution code {
+            background: rgba(102, 126, 234, 0.2);
+            color: #667eea;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="user-info">
+            <div class="user-avatar">{{ user_name[0].upper() if user_name else 'U' }}</div>
+            <div>
+                <div>
+                    <strong>{{ user_name }}</strong>
+                    <span class="role-badge {{ 'admin-role' if is_admin else 'user-role' }}">
+                        {{ ', '.join(user_roles) if user_roles else 'user' }}
+                    </span>
+                </div>
+                <div style="font-size: 12px; color: #666;">{{ user_email }}</div>
+            </div>
+        </div>
+        <button onclick="clearChatHistory()" class="nav-btn" style="background: linear-gradient(135deg, #ffc107 0%, #ff8c00 100%); margin-right: 10px;">🗑️ Clear History</button>
+        <a href="http://localhost:8002/dashboard" class="nav-btn">🔐 Auth Dashboard</a>
+        <a href="/logout" class="logout-btn">🚪 Logout</a>
+    </div>
+    
+    <div class="chat-container">
+        <div class="messages" id="messages">
+            <div class="message assistant">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you with:<ul><li>📁 File operations (reading, listing, searching files)</li><li>💻 System commands (when safe and appropriate)</li><li>📊 Data analysis and processing</li><li>❓ General questions and tasks</li></ul>What would you like to help you with today?
+                </div>
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <form class="input-form" id="chatForm">
+                <input 
+                    type="text" 
+                    class="message-input" 
+                    id="messageInput" 
+                    placeholder="Ask me anything! I have access to MCP tools..."
+                    autocomplete="off"
+                >
+                <button type="submit" class="send-btn" id="sendBtn">Send</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const messagesContainer = document.getElementById('messages');
+        const chatForm = document.getElementById('chatForm');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function addMessage(content, isUser = false, messageData = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = isUser ? '{{ user_name[0].upper() if user_name else "U" }}' : '🤖';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            // Handle authorization errors specially
+            if (messageData && !messageData.success && messageData.error_type === 'authorization_required') {
+                // Store this request for potential auto-retry
+                if (messageData.message_id && messageData.error_details) {
+                    pendingAuthRequests.set(messageData.message_id, {
+                        requiredScope: messageData.error_details.required_scope,
+                        originalMessage: messageData.original_message,
+                        toolName: messageData.error_details.tool_name,
+                        timestamp: Date.now()
+                    });
+                    console.log('📝 Stored pending auth request (regular):', messageData.message_id, messageData.error_details.required_scope);
+                }
+                
+                contentDiv.innerHTML = createAuthorizationErrorHtml(content, messageData);
+            } else {
+                // Format regular responses with tool calls
+                let formattedContent = '';
+                
+                // Show tool calls if present
+                if (messageData && messageData.tool_calls && messageData.tool_calls.length > 0) {
+                    formattedContent += createToolCallsHtml(messageData.tool_calls);
+                }
+                
+                // Add the main response content
+                if (content && content.trim()) {
+                    formattedContent += `<div class="formatted-response">${escapeHtml(content)}</div>`;
+                }
+                
+                if (formattedContent) {
+                    contentDiv.innerHTML = formattedContent;
+                } else {
+                    contentDiv.textContent = content || 'No response content';
+                }
+            }
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            
+            // Force scroll to bottom with proper timing
+            requestAnimationFrame(() => {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            });
+        }
+
+        function createToolCallsHtml(toolCalls) {
+            if (!toolCalls || toolCalls.length === 0) return '';
+            
+            let html = '<div class="tool-calls">';
+            html += '<div class="tool-call-header">🔧 Tool Calls</div>';
+            
+            toolCalls.forEach((toolCall, index) => {
+                html += `
+                    <div class="tool-call-item">
+                        <div class="tool-call-name">${escapeHtml(toolCall.tool_name)}</div>
+                        <div class="tool-call-args">Arguments: ${escapeHtml(toolCall.arguments)}</div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            return html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function createAuthorizationErrorHtml(content, messageData) {
+            const errorDetails = messageData.error_details || messageData;
+            const errorType = messageData.error_type;
+            const autoApproved = errorDetails.auto_approved;
+            
+            // For auto-approved cases, still show the approval UI with retry button
+            if (errorType === 'auto_approved' || autoApproved) {
+                const messageId = messageData.message_id;
+                return `<div class="authorization-error">
+<div class="error-title">🔐 Authorization Required</div>
+<div class="error-details"><strong>${errorDetails.tool_name}</strong> requires <strong>${errorDetails.required_scope}</strong></div>
+<div class="authorization-buttons"><button class="auth-btn retry" onclick="retryMessage('${messageId}', '${errorDetails.required_scope}')" id="retry-${messageId}">🔄 Retry Message</button></div>
+<div id="status-${messageId}"><div class="approval-status success">✅ Auto-approved! Retry your request.</div></div>
+</div>`;
+            }
+            
+            // For manual approval cases, show simple message without buttons
+            const approvalStatus = errorDetails.approval_status || 'pending';
+            let statusMessage = '';
+            
+            if (approvalStatus === 'pending_admin_approval') {
+                statusMessage = 'An approval request has been submitted to the administrator.';
+            } else if (approvalStatus === 'pending_user_approval') {
+                statusMessage = 'An approval request has been submitted and is waiting for your review.';
+            } else if (approvalStatus === 'pending') {
+                statusMessage = 'An approval request has been submitted.';
+            } else {
+                statusMessage = 'This tool requires administrator approval.';
+            }
+            
+            return `<div class="simple-auth-message">
+<div class="auth-message">🔐 <strong>Attempted to use tool:</strong> <code>${errorDetails.tool_name}</code></div>
+<div class="auth-details">This tool requires <strong>${errorDetails.required_scope}</strong> permission. ${statusMessage}</div>
+<div class="auth-hint">💡 You can retry your request after the administrator approves access.</div>
+</div>`;
+        }
+
+        // Removed complex approval functions - using simple UX now
+
+        async function retryMessage(messageId, requiredScope = 'read:files') {
+            const retryBtn = document.getElementById(`retry-${messageId}`);
+            const originalText = retryBtn.textContent;
+            
+            retryBtn.disabled = true;
+            retryBtn.textContent = '🔄 Checking permissions...';
+            
+            try {
+                // First check for token updates
+                const tokenUpdated = await checkForTokenUpdates();
+                if (tokenUpdated) {
+                    retryBtn.textContent = '🔄 Retrying with new permissions...';
+                } else {
+                    retryBtn.textContent = '🔄 Negotiating token...';
+                }
+                
+                const response = await fetch('/retry-message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        message_id: messageId,
+                        required_scope: requiredScope 
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    addMessage(data.response, false, data);
+                    
+                    // Remove from pending requests since it succeeded
+                    pendingAuthRequests.delete(messageId);
+                    console.log('✅ Removed successful request from pending:', messageId);
+                    
+                    // Remove the authorization error message
+                    const statusDiv = document.getElementById(`status-${messageId}`);
+                    if (statusDiv) {
+                        const successMessage = data.token_updated 
+                            ? '✅ Token updated & retried!' 
+                            : '✅ Retried successfully!';
+                        statusDiv.innerHTML = `<div class="approval-status success">${successMessage}</div>`;
+                    }
+                    
+                    // Auto-scroll after adding message
+                    setTimeout(() => {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    }, 100);
+                } else {
+                    addMessage(`Retry failed: ${data.response || 'Unknown error'}`);
+                    retryBtn.disabled = false;
+                    retryBtn.textContent = originalText;
+                }
+            } catch (error) {
+                addMessage(`Error retrying message: ${error.message}`);
+                retryBtn.disabled = false;
+                retryBtn.textContent = originalText;
+            }
+        }
+
+        function setLoading(loading) {
+            sendBtn.disabled = loading;
+            sendBtn.textContent = loading ? 'Sending...' : 'Send';
+            messageInput.disabled = loading;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const message = messageInput.value.trim();
+            if (!message) return;
+            
+            // Add user message
+            addMessage(message, true);
+            messageInput.value = '';
+            setLoading(true);
+            
+            // Try streaming first, fallback to regular if needed
+            const useStreaming = true;
+            
+            if (useStreaming) {
+                try {
+                    await handleStreamingResponse(message);
+                } catch (error) {
+                    console.warn('Streaming failed, falling back to regular response:', error);
+                    await handleRegularResponse(message);
+                }
+            } else {
+                await handleRegularResponse(message);
+            }
+            
+            setLoading(false);
+            messageInput.focus();
+        });
+        
+        async function handleStreamingResponse(message) {
+            console.log('Sending streaming message:', message);
+            
+            // Create assistant message container for streaming
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = '🤖';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = '<div class="loading">🤖 Thinking...</div>';
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: message, stream: true })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            // Check if response is JSON (authorization error) or streaming text
+            const contentType = response.headers.get('content-type');
+            
+            if (contentType && contentType.includes('application/json')) {
+                // This is a JSON response (likely authorization error)
+                const data = await response.json();
+                console.log('Received JSON response from streaming endpoint:', data);
+                
+                // Remove the loading message container
+                messageDiv.remove();
+                
+                // Handle as regular message with authorization error
+                addMessage(data.response, false, data);
+                return;
+            }
+            
+            // Handle as streaming text response
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let content = '';
+            
+            contentDiv.innerHTML = ''; // Clear loading message
+            
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    content += chunk;
+                    
+                    // Check for token update markers (auto-approval)
+                    const tokenUpdateMatch = content.match(/__TOKEN_UPDATE_START__(.+?)__TOKEN_UPDATE_END__/);
+                    if (tokenUpdateMatch) {
+                        try {
+                            const tokenUpdateData = JSON.parse(tokenUpdateMatch[1]);
+                            console.log('🎫 Token auto-updated:', tokenUpdateData);
+                            
+                            // Show success message
+                            contentDiv.innerHTML = `<div class="auto-approval-success"><div class="success-icon">✅</div><div class="success-message"><strong>Access Automatically Approved!</strong><br>${tokenUpdateData.message}</div><div class="retry-info">Retrying your request...</div></div>`;
+                            
+                            // Clear the reader and close the stream to prevent further processing
+                            reader.releaseLock();
+                            
+                            // Update the session token via the backend
+                            fetch('/update-token', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ new_token: tokenUpdateData.new_token })
+                            }).then(response => response.json()).then(result => {
+                                if (result.success) {
+                                    console.log('🎫 Session token updated successfully');
+                                    
+                                    // Wait a moment then retry with a fresh request
+                                    setTimeout(() => {
+                                        console.log('🔄 Auto-retrying message after token update');
+                                        // Remove the current message div and start fresh
+                                        messageDiv.remove();
+                                        handleRegularResponse(message);
+                                        
+                                        // Auto-scroll after retry
+                                        setTimeout(() => {
+                                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                        }, 200);
+                                    }, 1500);
+                                } else {
+                                    console.error('Failed to update token:', result.error);
+                                    contentDiv.innerHTML = '<div class="error">❌ Failed to update authentication token</div>';
+                                }
+                            }).catch(error => {
+                                console.error('Error updating token:', error);
+                                contentDiv.innerHTML = '<div class="error">❌ Failed to update authentication token</div>';
+                            });
+                            return;
+                        } catch (e) {
+                            console.error('Failed to parse token update:', e);
+                        }
+                    }
+                    
+                    // Check for authorization error markers
+                    const authErrorMatch = content.match(/__AUTH_ERROR_START__(.+?)__AUTH_ERROR_END__/);
+                    if (authErrorMatch) {
+                        try {
+                            const authErrorData = JSON.parse(authErrorMatch[1]);
+                            console.log('🔐 Authorization event detected in stream:', authErrorData);
+                            
+                            // Instead of removing the message, update the content to show authorization info
+                            if (authErrorData.error_type === 'auto_approved') {
+                                // Auto-approval case - show success message in the existing message
+                                const approvalContent = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${authErrorData.tool_name}</code></div><div class="auto-approval-success"><div class="success-message">✅ Access automatically approved for ${authErrorData.tool_name}</div><div class="retry-info">Retrying your request with updated permissions...</div></div>`;
+                                contentDiv.innerHTML = approvalContent;
+                                
+                                // Update session token and auto-retry after a short delay
+                                fetch('/update-token', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ new_token: authErrorData.new_token })
+                                }).then(response => response.json()).then(result => {
+                                    if (result.success) {
+                                        console.log('🎫 Session token updated for auto-approval');
+                                        
+                                        // Auto-retry after a short delay
+                                        setTimeout(async () => {
+                                            console.log('🔄 Auto-retrying after approval');
+                                            
+                                            // Update the message to show retry status
+                                            contentDiv.innerHTML = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${authErrorData.tool_name}</code></div><div class="auto-approval-success"><div class="success-message">✅ Access approved - retrying request...</div></div>`;
+                                            
+                                            try {
+                                                // Use the auto-retry endpoint instead of creating a new streaming request
+                                                const retryResponse = await fetch('/auto-retry', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ 
+                                                        original_message: authErrorData.original_message
+                                                    })
+                                                });
+                                                
+                                                const retryData = await retryResponse.json();
+                                                
+                                                if (retryResponse.ok && retryData.success) {
+                                                    // Replace the current message content with the successful result
+                                                    contentDiv.innerHTML = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${authErrorData.tool_name}</code></div>${formatStreamingContent(retryData.response)}`;
+                                                } else {
+                                                    // Show retry failure
+                                                    contentDiv.innerHTML = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${authErrorData.tool_name}</code></div><div class="auto-approval-success"><div class="error-message">❌ Auto-retry failed: ${retryData.error || 'Unknown error'}</div></div>`;
+                                                }
+                                            } catch (error) {
+                                                console.error('Auto-retry failed:', error);
+                                                contentDiv.innerHTML = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${authErrorData.tool_name}</code></div><div class="auto-approval-success"><div class="error-message">❌ Auto-retry failed: ${error.message}</div></div>`;
+                                            }
+                                        }, 1500);
+                                    }
+                                });
+                            } else {
+                                // Regular authorization error - show simple message without buttons
+                                const errorMessageData = {
+                                    success: false,
+                                    error_type: 'authorization_required',
+                                    error_details: {
+                                        tool_name: authErrorData.tool_name,
+                                        required_scope: authErrorData.required_scope,
+                                        approval_requested: true
+                                    },
+                                    original_message: authErrorData.original_message,
+                                    message_id: authErrorData.message_id
+                                };
+                                
+                                // Store this request for potential auto-retry (admin might approve in dashboard)
+                                pendingAuthRequests.set(authErrorData.message_id, {
+                                    requiredScope: authErrorData.required_scope,
+                                    originalMessage: authErrorData.original_message,
+                                    toolName: authErrorData.tool_name,
+                                    timestamp: Date.now()
+                                });
+                                console.log('📝 Stored pending auth request:', authErrorData.message_id, authErrorData.required_scope);
+                                
+                                // Create simple authorization error content
+                                const authErrorContent = `<div class="tool-execution">🛠 <strong>Attempted tool:</strong> <code>${authErrorData.tool_name}</code></div>${createAuthorizationErrorHtml(`🔐 Authorization required for ${authErrorData.tool_name}`, errorMessageData)}`;
+                                contentDiv.innerHTML = authErrorContent;
+                            }
+                            
+                            // Auto-scroll after showing authorization message
+                            requestAnimationFrame(() => {
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            });
+                            return;
+                        } catch (e) {
+                            console.error('Failed to parse authorization error:', e);
+                        }
+                    }
+                    
+                    // Parse markdown-like formatting for tool calls
+                    const formattedContent = formatStreamingContent(content);
+                    contentDiv.innerHTML = formattedContent;
+                    
+                    // Auto-scroll to bottom with proper timing
+                    requestAnimationFrame(() => {
+                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    });
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        }
+        
+        async function handleRegularResponse(message) {
+            try {
+                console.log('Sending regular message:', message);
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response ok:', response.ok);
+                
+                if (!response.ok) {
+                    // Try to get error details from response
+                    let errorMessage = `HTTP ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || errorMessage;
+                    } catch (jsonError) {
+                        console.error('Failed to parse error response as JSON:', jsonError);
+                        errorMessage = `${errorMessage} - ${response.statusText}`;
+                    }
+                    addMessage(`Server Error: ${errorMessage}`);
+                    return;
+                }
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (data.success) {
+                    addMessage(data.response, false, data);
+                } else {
+                    // Handle authorization and other errors
+                    addMessage(data.response, false, data);
+                }
+                
+            } catch (error) {
+                console.error('Fetch error:', error);
+                let errorMessage = error.message;
+                
+                // Provide more specific error messages
+                if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    errorMessage = 'Cannot connect to server. Please check if the chat app is running on port 5001.';
+                } else if (error.name === 'SyntaxError') {
+                    errorMessage = 'Server returned invalid response format.';
+                }
+                
+                addMessage(`Connection Error: ${errorMessage}`);
+            }
+        }
+        
+        function formatStreamingContent(content) {
+            // Clean up tool execution details and show only the clean response
+            let cleaned = content;
+            
+            // Remove the raw tool execution details that show before the clean response
+            // Pattern: "function_name({...})Tool:function_name Args:{...}Tool:function_name Response:[TextContentItem(...)]"
+            cleaned = cleaned.replace(/[a-zA-Z_]+\([^)]*\)Tool:[a-zA-Z_]+[^]*?Response:\[TextContentItem\([^)]*\)\]/g, '');
+            
+            // Remove any remaining tool debug patterns
+            cleaned = cleaned.replace(/Tool:[a-zA-Z_]+\s+Args:[^}]*}/g, '');
+            cleaned = cleaned.replace(/Tool:[a-zA-Z_]+\s+Response:[^\n]*\n?/g, '');
+            
+            // Extract tool name from the 🛠 marker
+            const toolMatch = content.match(/🛠 \*\*Used Tool:\*\* `([^`]+)`/);
+            let toolHeader = '';
+            if (toolMatch) {
+                toolHeader = `<div class="tool-execution">🛠 <strong>Used tool:</strong> <code>${toolMatch[1]}</code></div>\n\n`;
+            }
+            
+            // Remove the 🛠 marker line since we're showing it in the header
+            cleaned = cleaned.replace(/🛠 \*\*Used Tool:\*\* `[^`]+`\s*\n?/g, '');
+            
+            // Convert markdown-like formatting to HTML
+            let formatted = escapeHtml(cleaned.trim());
+            
+            // Format authorization errors
+            formatted = formatted.replace(/🔐 \*\*Authorization Required\*\*/g, 
+                '<div class="auth-error-header">🔐 <strong>Authorization Required</strong></div>');
+            
+            // Format bold text
+            formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            
+            // Format code blocks
+            formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // Convert newlines to line breaks
+            formatted = formatted.replace(/\n/g, '<br>');
+            
+            // Clean up multiple consecutive line breaks
+            formatted = formatted.replace(/(<br\s*\/?>){3,}/g, '<br><br>');
+            
+            return toolHeader + formatted;
+        }
+
+        // Status polling removed - using simple UX now
+
+        // Request again functionality removed - using simple UX now
+
+        // Load chat history on page load
+        async function loadChatHistory() {
+            try {
+                console.log('Loading chat history...');
+                const response = await fetch('/api/chat-history?limit=100');
+                
+                if (!response.ok) {
+                    console.error('Failed to load chat history:', response.status);
+                    return;
+                }
+                
+                const data = await response.json();
+                console.log('Chat history loaded:', data);
+                
+                if (data.status === 'success' && data.messages && data.messages.length > 0) {
+                    // Clear any existing messages (but we'll re-add welcome message)
+                    messagesContainer.innerHTML = '';
+                    
+                    // Re-add welcome message first
+                    const welcomeMessage = `<div class="message assistant"><div class="message-avatar">🤖</div><div class="message-content"><strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you with:<ul><li>📁 File operations (reading, listing, searching files)</li><li>💻 System commands (when safe and appropriate)</li><li>📊 Data analysis and processing</li><li>❓ General questions and tasks</li></ul>What would you like to help you with today?</div></div>`;
+                    messagesContainer.innerHTML = welcomeMessage;
+                    
+                    // Add each message to the chat
+                    data.messages.forEach(message => {
+                        const isUser = message.type === 'user';
+                        let messageData = null;
+                        
+                        if (!isUser && message.metadata) {
+                            messageData = {
+                                success: message.metadata.success !== false,
+                                tool_calls: message.metadata.tool_calls || null,
+                                error_type: message.metadata.error_type || null,
+                                error_details: null
+                            };
+                            
+                            // Handle authorization errors from chat history
+                            if (message.metadata.error_type === 'authorization_required') {
+                                messageData.error_details = {
+                                    tool_name: message.metadata.tool_name || 'unknown',
+                                    required_scope: message.metadata.required_scope || 'unknown',
+                                    approval_requested: true,
+                                    approval_status: message.metadata.approval_status || 'pending'
+                                };
+                                
+                                // Generate a unique message ID for the historical message
+                                messageData.message_id = `history_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                                messageData.original_message = message.metadata.original_message || 'Unknown request';
+                            }
+                        }
+                        
+                        addMessage(message.content, isUser, messageData);
+                    });
+                    
+                    console.log(`Loaded ${data.messages.length} messages from history`);
+                } else {
+                    console.log('No chat history found - keeping welcome message');
+                    // Keep the welcome message if no history exists
+                }
+            } catch (error) {
+                console.error('Error loading chat history:', error);
+            }
+        }
+
+        // Add clear chat history function
+        async function clearChatHistory() {
+            if (!confirm('Are you sure you want to clear all chat history? This cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/clear-chat-history', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Clear the messages container
+                    messagesContainer.innerHTML = '';
+                    
+                    // Add a welcome message back
+                    const welcomeMessage = `<div class="message assistant"><div class="message-avatar">🤖</div><div class="message-content"><strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you with:<ul><li>📁 File operations (reading, listing, searching files)</li><li>💻 System commands (when safe and appropriate)</li><li>📊 Data analysis and processing</li><li>❓ General questions and tasks</li></ul>What would you like to help you with today?</div></div>`;
+                    messagesContainer.innerHTML = welcomeMessage;
+                    
+                    // Scroll to bottom
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    
+                    alert(`✅ Cleared ${data.deleted_count} messages from history`);
+                } else {
+                    const errorData = await response.json();
+                    alert(`Failed to clear chat history: ${errorData.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error clearing chat history:', error);
+                alert('Error clearing chat history');
+            }
+        }
+
+        // Store pending authorization requests for auto-retry
+        const pendingAuthRequests = new Map();
+
+        // Clean up old pending requests (older than 10 minutes)
+        function cleanupOldPendingRequests() {
+            const tenMinutesAgo = Date.now() - (10 * 60 * 1000);
+            
+            for (const [messageId, requestData] of pendingAuthRequests.entries()) {
+                // If request doesn't have a timestamp, add one
+                if (!requestData.timestamp) {
+                    requestData.timestamp = Date.now();
+                    continue;
+                }
+                
+                // Remove old requests
+                if (requestData.timestamp < tenMinutesAgo) {
+                    console.log('🧹 Cleaning up old pending request:', messageId);
+                    pendingAuthRequests.delete(messageId);
+                }
+            }
+        }
+
+        // Token update checking with auto-retry
+        async function checkForTokenUpdates() {
+            try {
+                const response = await fetch('/api/check-token-update');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.token_updated) {
+                        console.log('🎫 Token updated with new scopes:', data.new_scopes);
+                        
+                        // Show a notification to the user
+                        const notification = document.createElement('div');
+                        notification.style.cssText = `
+                            position: fixed;
+                            top: 20px;
+                            right: 20px;
+                            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                            color: white;
+                            padding: 12px 20px;
+                            border-radius: 8px;
+                            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+                            z-index: 1000;
+                            font-weight: 600;
+                        `;
+                        notification.textContent = '✅ New permissions approved! Auto-retrying requests...';
+                        document.body.appendChild(notification);
+                        
+                        // Remove notification after 3 seconds
+                        setTimeout(() => {
+                            if (notification.parentNode) {
+                                notification.parentNode.removeChild(notification);
+                            }
+                        }, 3000);
+                        
+                        // Auto-retry any pending authorization requests
+                        await autoRetryPendingRequests(data.new_scopes);
+                        
+                        return true; // Token was updated
+                    }
+                }
+            } catch (error) {
+                console.log('Token update check failed:', error);
+            }
+            return false; // No update
+        }
+
+        // Auto-retry pending authorization requests when new scopes are available
+        async function autoRetryPendingRequests(newScopes) {
+            console.log('🔄 Auto-retrying pending requests with new scopes:', newScopes);
+            
+            for (const [messageId, requestData] of pendingAuthRequests.entries()) {
+                const { requiredScope, originalMessage } = requestData;
+                
+                // Check if the new scopes include the required scope for this request
+                if (newScopes.includes(requiredScope)) {
+                    console.log(`🎯 Auto-retrying request ${messageId} for scope: ${requiredScope}`);
+                    
+                    // Update the status message to show auto-retry
+                    const statusDiv = document.getElementById(`status-${messageId}`);
+                    if (statusDiv) {
+                        statusDiv.innerHTML = `<div class="approval-status success">✅ Permission approved! Auto-retrying...</div>`;
+                    }
+                    
+                    try {
+                        // Use the auto-retry endpoint with the original message
+                        const response = await fetch('/auto-retry', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ 
+                                original_message: originalMessage
+                            })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (response.ok && data.success) {
+                            // Add the successful result as a new assistant message
+                            addMessage(data.response, false, data);
+                            
+                            // Remove from pending requests
+                            pendingAuthRequests.delete(messageId);
+                            
+                            // Update status to show success
+                            if (statusDiv) {
+                                statusDiv.innerHTML = `<div class="approval-status success">✅ Auto-retry successful!</div>`;
+                            }
+                            
+                            // Auto-scroll after adding message
+                            setTimeout(() => {
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            }, 100);
+                        } else {
+                            throw new Error(data.error || 'Auto-retry failed');
+                        }
+                    } catch (error) {
+                        console.error(`Failed to auto-retry request ${messageId}:`, error);
+                        
+                        // Update status to show retry failed
+                        if (statusDiv) {
+                            statusDiv.innerHTML = `<div class="approval-status error">❌ Auto-retry failed. Please try manually.</div>`;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            loadChatHistory();
+            messageInput.focus();
+            
+            // Start periodic token update checking
+            setInterval(checkForTokenUpdates, 5000); // Check every 5 seconds
+            
+            // Clean up old pending requests every minute
+            setInterval(cleanupOldPendingRequests, 60000);
+        });
+
+        // Focus input on load (fallback)
+        messageInput.focus();
+    </script>
+</body>
+</html> 

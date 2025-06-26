@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Agentic Chat - Login</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .logo {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .login-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: background 0.3s;
+        }
+        .login-btn:hover {
+            background: #3367d6;
+        }
+        .features {
+            margin-top: 30px;
+            text-align: left;
+        }
+        .feature {
+            margin: 10px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        .feature::before {
+            content: "✓ ";
+            color: #4285f4;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">🤖</div>
+        <h1>MCP Agentic Chat</h1>
+        <p class="subtitle">Secure chat with AI agents and MCP tools</p>
+        
+        <a href="http://localhost:8002/auth/login" class="login-btn">
+            🔐 Login with Google
+        </a>
+        
+        <p style="margin-top: 20px; font-size: 12px; color: #999;">
+            You'll be redirected to the authentication server
+        </p>
+        
+        <div class="features">
+            <div class="feature">Google OAuth authentication</div>
+            <div class="feature">Llama Stack agents with MCP tools</div>
+            <div class="feature">Secure Bearer token authentication</div>
+            <div class="feature">Real-time chat interface</div>
+        </div>
+    </div>
+</body>
+</html> 

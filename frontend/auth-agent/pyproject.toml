@@ -1,0 +1,13 @@
+[project]
+name = "auth-agent"
+version = "0.1.0"
+description = "Authorization agent provider for llama stack"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "llama-stack",
+    "pydantic",
+]
+
+[project.entry-points."llama_stack.agents_providers"]
+inline__auth_agent = "auth_agent.get_provider_impl"
