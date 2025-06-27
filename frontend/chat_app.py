@@ -169,20 +169,27 @@ def is_authorization_error(error_message: str) -> bool:
         
     return any(keyword in error_lower for keyword in authorization_keywords)
 
-async def request_scope_upgrade(required_scope: str, user_token: str) -> dict:
+async def request_scope_upgrade(required_scope: str, user_token: str, auth_cookies: dict = {}) -> dict:
     """Request scope upgrade through the auth server's upgrade-scope endpoint"""
     payload = {
         "scopes": [required_scope]
     }
     
     headers = {
-        "Authorization": f"Bearer {user_token}",
         "Content-Type": "application/json"
     }
     
+    # Use session cookies for authentication instead of JWT tokens
+    cookies = auth_cookies or {}
+    
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(f"{AUTH_SERVER_URL}/api/upgrade-scope", json=payload, headers=headers)
+            response = await client.post(
+                f"{AUTH_SERVER_URL}/api/upgrade-scope", 
+                json=payload, 
+                headers=headers,
+                cookies=cookies
+            )
             if response.status_code == 200:
                 return response.json()
             else:
@@ -292,9 +299,9 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         # Initialize Llama Stack client if not already done
         if not llama_client:
             llama_client = LlamaStackClient(
-                base_url=LLAMA_STACK_URL,
-                http_client=Client(verify=False),
-            )
+            base_url=LLAMA_STACK_URL,
+            http_client=Client(verify=False),
+        )
             logger.info("✅ Initialized Llama Stack client")
         
         # Check if user already has an agent
@@ -504,7 +511,7 @@ def send_message_to_agent(message: str, bearer_token: str) -> dict:
             logger.info(f"🔧 Found {len(tool_calls)} tool calls")
             for i, tool_call in enumerate(tool_calls):
                 logger.info(f"  Tool {i+1}: {tool_call['tool_name']} with args {tool_call['arguments'][:50]}...")
-                
+        
         except Exception as e:
             logger.error(f"❌ Error processing streaming response: {e}")
             import traceback
@@ -534,7 +541,8 @@ def send_message_to_agent(message: str, bearer_token: str) -> dict:
             required_scope = error_details.get('required_scope', 'execute:commands')
             
             try:
-                upgrade_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token))
+                auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
+                upgrade_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token, auth_cookies))
                 
                 if upgrade_result and not upgrade_result.get('error'):
                     status = upgrade_result.get('status')
@@ -665,16 +673,16 @@ def index():
         else:
             logger.info(f"✅ Local session already valid for {auth_user['email']}")
         
-        # Get user roles for display
+        # Get user roles for display (moved outside the else block)
         user_email = session.get('user_email', '')
         user_roles = get_user_roles(user_email)
         is_admin = 'admin' in user_roles
         
         return render_template('chat.html', 
-                             user_name=session.get('user_name', 'User'),
-                             user_email=user_email,
-                             user_roles=user_roles,
-                             is_admin=is_admin)
+                         user_name=session.get('user_name', 'User'),
+                         user_email=user_email,
+                         user_roles=user_roles,
+                         is_admin=is_admin)
     
     # No valid auth server session - clear local session and redirect to login
     logger.info("❌ No valid auth server session found")
@@ -731,13 +739,13 @@ def chat():
         # Ensure local session is up to date
         if session.get('user_email') != auth_user['email'] or not session.get('bearer_token'):
             return jsonify({'error': 'Session mismatch - please refresh page', 'success': False}), 401
-        
+    
         data = request.get_json()
         if not data:
             return jsonify({'error': 'Invalid JSON data', 'success': False}), 400
             
         message = data.get('message', '').strip()
-        
+    
         if not message:
             return jsonify({'error': 'Empty message', 'success': False}), 400
         
@@ -749,12 +757,14 @@ def chat():
         if stream:
             # Stream the response, but include special markers for authorization errors
             try:
+                auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
                 return Response(
                     stream_agent_response_with_auth_detection(
                         message, 
                         session['bearer_token'],
                         session.get('user_email', ''),
-                        message
+                        message,
+                        auth_cookies
                     ),
                     mimetype='text/plain'
                 )
@@ -770,7 +780,8 @@ def chat():
                     # Handle scope upgrade like in regular flow
                     required_scope = error_details.get('required_scope', 'execute:commands')
                     try:
-                        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token']))
+                        auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
+                        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token'], auth_cookies))
                         
                         if upgrade_result and not upgrade_result.get('error'):
                             status = upgrade_result.get('status')
@@ -815,13 +826,12 @@ def chat():
         else:
             # Return traditional JSON response
             logger.info(f"💬 Processing message: {message}")
-            
+    
             # Send to agent
             result = send_message_to_agent(message, session['bearer_token'])
-            
+    
             if result['success']:
                 # Assistant response automatically saved by Llama Stack session
-                
                 return jsonify({
                     'response': result['response'],
                     'tool_calls': result.get('tool_calls', []),
@@ -838,45 +848,21 @@ def chat():
                 
                 # If it's an authorization error, include additional details
                 if result['error_type'] == 'authorization_required':
-                    response_data['error_details'] = result['error_details']
-                    response_data['original_message'] = result['original_message']
-                    
-                    # Check if scope was auto-approved
-                    error_details = result['error_details']
-                    if error_details.get('auto_approved') and error_details.get('new_token'):
-                        # Update session with new token
-                        session['bearer_token'] = error_details['new_token']
-                        logger.info(f"🎫 Updated session token after auto-approval")
-                        
-                        # Mark as auto-approved for UI
-                        response_data['auto_approved'] = True
-                        response_data['message'] = "✅ Access automatically approved! You can retry your request now."
-                    
-                    # Store the pending message for potential retry
-                    message_id = secrets.token_urlsafe(16)
-                    pending_messages[message_id] = {
-                        'message': result['original_message'],
-                        'user_email': session.get('user_email', ''),
-                        'bearer_token': session['bearer_token'],  # Use updated token if available
-                        'timestamp': datetime.now().isoformat()
-                    }
-                    response_data['message_id'] = message_id
-                
-                # Error response automatically handled by Llama Stack session
+                    response_data['error_details'] = result.get('error_details', {})
+                    response_data['message_id'] = result.get('message_id')
+                    response_data['original_message'] = message
                 
                 return jsonify(response_data)
-    
+                
     except Exception as e:
-        logger.error(f"❌ Unexpected error in /chat endpoint: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Chat error: {e}")
         return jsonify({
             'error': f'Server error: {str(e)}',
             'success': False,
             'error_type': 'server_error'
         }), 500
 
-def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str):
+def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}):
     """Stream agent response with special handling for authorization errors"""
     global llama_client, user_agents
     
@@ -953,7 +939,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                     # Request scope upgrade automatically
                     required_scope = error_details.get('required_scope', 'read:files')
                     try:
-                        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token))
+                        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token, auth_cookies))
                         if upgrade_result and not upgrade_result.get('error'):
                             error_details['approval_requested'] = True
                             error_details['approval_status'] = upgrade_result.get('status')
@@ -1142,7 +1128,8 @@ def request_approval():
         return jsonify({'error': 'Required scope not specified'}), 400
     
     # Use the auth server's upgrade-scope endpoint
-    upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token']))
+    auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
+    upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token'], auth_cookies))
     
     if 'error' in upgrade_result:
         return jsonify({'error': upgrade_result['error']}), 500
@@ -1221,7 +1208,8 @@ def retry_message():
     
     # Request a new token with the approved scope from the auth server
     try:
-        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token']))
+        auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
+        upgrade_result = asyncio.run(request_scope_upgrade(required_scope, session['bearer_token'], auth_cookies))
         
         if upgrade_result and not upgrade_result.get('error'):
             status = upgrade_result.get('status')

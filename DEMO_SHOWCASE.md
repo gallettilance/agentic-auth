@@ -6,20 +6,23 @@ This demo showcases a **unified authentication and authorization system** with d
 
 The system consists of four main components:
 
-- **🔐 Unified Auth Server** (Port 8002) - OAuth, JWT, scopes, approvals, admin dashboard
+- **🔐 Auth Server** (Port 8002) - OAuth, JWT, scopes, approvals, admin dashboard, RFC 8693 token exchange
 - **📡 MCP Server** (Port 8001) - Tool execution with scope-based authorization  
-- **🦙 Llama Stack** (Port 8321) - AI agent runtime with auth-agent integration
-- **🌐 Chat App** (Port 5001) - Web interface with streaming responses and approval UI
+- **🦙 Llama Stack** (Port 8321) - AI agent runtime with auth-agent integration and session management
+- **🌐 Chat App** (Port 5001) - Web interface with streaming responses, approval UI, and persistent chat history
 
-## 👥 **Demo User Accounts**
+## 👥 **User Management**
 
-| User | Email | Roles | Auto-Approved Scopes |
-|------|-------|-------|---------------------|
-| **Admin** | `gallettilance@gmail.com` | admin, developer | All scopes |
-| **Developer** | `demo@example.com` | developer | `read:files` |
-| **User** | `lgallett@redhat.com` | user | `read:files` |
+The system uses **automatic user creation** with role-based access:
 
-**Demo Password:** `demo` (for all accounts)
+| User Type | Email | Auto-Created Role | Auto-Approved Scopes |
+|-----------|-------|-------------------|---------------------|
+| **Admin** | `gallettilance@gmail.com` | admin | All scopes (pre-configured) |
+| **Regular Users** | Any Google account | user | `read:files` only |
+
+- **Admin user** is pre-configured during demo setup
+- **All other users** are automatically created with `user` role on first login
+- **No passwords needed** - uses Google OAuth for authentication
 
 ## 🛠️ **Quick Start**
 
@@ -40,22 +43,22 @@ nano .env
 
 ### **3. Access the Demo**
 - **Chat Interface:** http://localhost:5001
-- **Auth Dashboard:** http://localhost:8002/dashboard  
-- **Demo Login:** http://localhost:8002/auth/demo-login
+- **Auth Dashboard:** http://localhost:8002/dashboard
 
 ## 🎬 **Demo Walkthrough**
 
-### **Phase 1: Basic Access (No Scopes Required)**
+### **Phase 1: User Login & Auto-Creation**
 
 1. **Open Chat Interface**
    ```
    🌐 http://localhost:5001
    ```
 
-2. **Login as Regular User**
-   - Click "Login with Demo Account"
-   - Email: `lgallett@redhat.com`
-   - Password: `demo`
+2. **Login with Google Account**
+   - Click "Login" button
+   - Authenticate with any Google account
+   - **User is automatically created** with `user` role on first login
+   - Redirected back to chat interface
 
 3. **Try Basic Commands** ✅
    ```
@@ -70,7 +73,7 @@ nano .env
    ```
    💬 "List files in the current directory"
    ```
-   - User has `user` role → auto-approved for `read:files` scope
+   - New user has `user` role → auto-approved for `read:files` scope
    - Command executes immediately
    - Shows: "✅ Auto-approved! Retry your request."
 
@@ -99,11 +102,11 @@ nano .env
    ```
 
 8. **Login as Admin**
-   - Email: `gallettilance@gmail.com` 
-   - Password: `demo`
+   - Use the pre-configured admin account: `gallettilance@gmail.com`
+   - Authenticate with Google OAuth
 
 9. **Review & Approve Request**
-   - See pending request from `lgallett@redhat.com`
+   - See pending request from the regular user
    - Tool: `execute_command`
    - Required scope: `execute:commands`
    - Risk level: **CRITICAL**
@@ -117,12 +120,26 @@ nano .env
     - Click "🔄 Retry Message"
     - Command executes successfully with upgraded token!
 
+### **Phase 6: Chat History Persistence**
+
+11. **Test Session Persistence**
+    - Navigate to dashboard and back to chat
+    - Chat history is preserved across navigation
+    - Previous messages and approvals remain visible
+    - Welcome message displays on first visit
+
 ## 🔍 **Key Features Demonstrated**
 
 ### **🔒 Zero-Trust Security**
-- Users start with minimal permissions
+- Users start with minimal permissions (`user` role, `read:files` scope only)
 - Scope escalation requires explicit approval
 - No standing privileges for high-risk operations
+
+### **👤 Automatic User Onboarding**
+- **No manual user creation** required
+- **Google OAuth integration** for seamless authentication
+- **Auto-assigned roles** based on email domain or default policies
+- **Admin pre-configuration** during demo setup
 
 ### **📊 Role-Based Auto-Approval**
 ```python
@@ -152,13 +169,21 @@ SCOPES = {
 - One-click approve/deny actions
 - Tool access visualization
 
+### **💾 Persistent Chat History**
+- Chat history stored in Llama Stack's native database
+- Sessions persist across browser navigation
+- Welcome messages and conversation context maintained
+- Direct database access for optimal performance
+
 ## 🎯 **Architecture Highlights**
 
 ### **Unified Auth Server Benefits**
 - **Single source of truth** for authentication and authorization
 - **Integrated approval workflows** - no separate approval service needed
 - **Built-in admin dashboard** with real-time updates
-- **OAuth + Demo login** support for flexible authentication
+- **Google OAuth integration** for production-ready authentication
+- **RFC 8693 token exchange** for standards-compliant MCP integration
+- **Automatic user provisioning** with role-based defaults
 
 ### **Scope-Based Authorization**
 ```python
@@ -191,19 +216,50 @@ def evaluate_approval_policy(user_email, requested_scopes):
     }
 ```
 
-## 🔧 **Customization Points**
-
-### **1. User Roles & Permissions**
-Edit `USER_ROLES` in `mcp/unified_auth_server.py`:
+### **Automatic User Creation**
 ```python
-USER_ROLES = {
-    "your-email@company.com": ["admin", "developer"],
-    "user@company.com": ["user"],
-    # Add more users...
-}
+# OAuth callback handler
+@app.get("/auth/callback")
+async def oauth_callback(code: str, state: str):
+    # ... token exchange ...
+    
+    # Create or get user from database
+    db_user = auth_db.get_user(user_email)
+    if not db_user:
+        # Auto-create new user with default role
+        auth_db.create_user(user_email, ["user"])
+        db_user = auth_db.get_user(user_email)
 ```
 
-### **2. Scope Configuration**
+### **Chat History Integration**
+- **Llama Stack Native Storage** - Uses Llama Stack's built-in session management
+- **Direct Database Access** - Queries `kvstore.db` for optimal performance
+- **Session Isolation** - Per-user agent instances with isolated chat history
+- **Timestamp Ordering** - Chronological message ordering with proper sorting
+
+## 🔧 **Customization Points**
+
+### **1. Admin User Configuration**
+Edit the admin email in `start_demo.sh`:
+```bash
+# Set admin email for the demo
+export ADMIN_EMAIL="your-admin@company.com"
+```
+
+### **2. User Role Assignment**
+Modify auto-role assignment logic in `auth-server/unified_auth_server_v2.py`:
+```python
+# Example: Assign roles based on email domain
+def determine_user_role(email: str) -> List[str]:
+    if email.endswith("@company.com"):
+        return ["developer"]
+    elif email.endswith("@admin.company.com"):
+        return ["admin"]
+    else:
+        return ["user"]  # Default role
+```
+
+### **3. Scope Configuration**
 Modify `SCOPES` to add new permissions:
 ```python
 SCOPES = {
@@ -216,11 +272,24 @@ SCOPES = {
 }
 ```
 
-### **3. OAuth Integration**
+### **4. OAuth Integration**
 Set environment variables for Google OAuth:
 ```bash
 export GOOGLE_CLIENT_ID=your_client_id
 export GOOGLE_CLIENT_SECRET=your_client_secret
+```
+
+### **5. Token Exchange Configuration**
+Configure MCP clients in `auth-server/unified_auth_server_v2.py`:
+```python
+CLIENTS = {
+    "mcp-server": {
+        "client_secret": "mcp-server-secret",
+        "client_type": "confidential",
+        "token_exchange_enabled": True,
+        "allowed_audiences": ["file-service", "command-executor"]
+    }
+}
 ```
 
 ## 🛑 **Stopping the Demo**
@@ -267,14 +336,52 @@ tail -f logs/chat_app.log
 
 # Verify Llama Stack connection
 curl http://localhost:8321
+
+# Check chat history database
+ls -la ~/.llama/sessions/
+```
+
+### **Google OAuth Issues**
+```bash
+# Verify OAuth configuration
+echo $GOOGLE_CLIENT_ID
+echo $GOOGLE_CLIENT_SECRET
+
+# Check redirect URI in Google Console:
+# http://localhost:8002/auth/callback
+```
+
+### **User Creation Issues**
+```bash
+# Check if users are being created
+sqlite3 auth-server/auth.db "SELECT email, roles FROM users;"
+
+# Verify admin user exists
+sqlite3 auth-server/auth.db "SELECT email, is_admin FROM users WHERE is_admin = 1;"
+```
+
+### **Chat History Not Persisting**
+```bash
+# Verify Llama Stack database
+sqlite3 ~/.llama/sessions/kvstore.db ".tables"
+
+# Check session data
+sqlite3 ~/.llama/sessions/kvstore.db "SELECT key FROM kvstore WHERE key LIKE 'session:%' LIMIT 5;"
 ```
 
 ## 📚 **Additional Documentation**
 
-- **[Approval Flows](mcp/APPROVAL_FLOWS.md)** - Detailed approval workflow documentation
-- **[Scope Upgrade Flow](mcp/SCOPE_UPGRADE_FLOW.md)** - Technical implementation details
+### **Core Documentation**
+- **[Auth Server README](auth-server/README.md)** - Authentication server implementation
+- **[MCP Server README](mcp/README.md)** - MCP server implementation guide
+
+### **Auth Server Detailed Guides**
+- **[Token Exchange Guide](auth-server/TOKEN_EXCHANGE.md)** - RFC 8693 token exchange implementation
+- **[Approval Workflows](auth-server/APPROVAL_WORKFLOWS.md)** - Approval and scope upgrade flows
+
+### **Frontend Documentation**
 - **[Auth Agent README](frontend/auth-agent/README.md)** - Agent integration documentation
 
 ---
 
-This unified demo showcases a production-ready authentication and authorization system that scales from development to enterprise environments while maintaining security, usability, and transparency. 
+This unified demo showcases a production-ready authentication and authorization system with **automatic user onboarding** that scales from development to enterprise environments while maintaining security, usability, and transparency with persistent chat history and standards-compliant token exchange. 

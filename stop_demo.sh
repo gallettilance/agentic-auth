@@ -110,6 +110,12 @@ if [ -f "kvstore.db" ]; then
     echo -e "${GREEN}✅ Removed kvstore.db${NC}"
 fi
 
+# Clean up auth database
+if [ -f "auth-server/auth.db" ]; then
+    rm -f auth-server/auth.db
+    echo -e "${GREEN}✅ Removed auth-server/auth.db${NC}"
+fi
+
 # Clean up any remaining processes
 echo ""
 echo "🧹 Cleaning up any remaining demo processes..."

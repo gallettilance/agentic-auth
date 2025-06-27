@@ -18,6 +18,9 @@ fi
 export PROJECT_ROOT=$(pwd)
 export PYTHONPATH="${PROJECT_ROOT}/frontend/auth-agent/src:${PYTHONPATH}"
 
+# Set admin email for the demo
+export ADMIN_EMAIL="gallettilance@gmail.com"
+
 # Google OAuth is optional - demo login works without it
 if [ -z "$GOOGLE_CLIENT_ID" ]; then
     echo "⚠️  GOOGLE_CLIENT_ID not set - OAuth will be disabled"
@@ -88,9 +91,14 @@ echo ""
 echo "🌟 Starting services..."
 echo "======================"
 
+# Initialize database and setup admin user
+echo "1️⃣  Initializing database and setting up admin user..."
+cd auth-server
+python init_admin.py --email "$ADMIN_EMAIL" --force
+echo ""
+
 # Start Unified Auth Server (Port 8002)
-echo "1️⃣  Starting Unified Auth Server on port 8002..."
-cd mcp
+echo "2️⃣  Starting Unified Auth Server on port 8002..."
 python unified_auth_server.py > ../logs/unified_auth_server.log 2>&1 &
 AUTH_PID=$!
 echo "   PID: $AUTH_PID"
@@ -98,7 +106,7 @@ cd ..
 sleep 2
 
 # Start MCP Server (Port 8001)
-echo "2️⃣  Starting MCP Server on port 8001..."
+echo "3️⃣  Starting MCP Server on port 8001..."
 cd mcp
 FASTMCP_PORT=8001 python mcp_server.py > ../logs/mcp_server.log 2>&1 &
 MCP_PID=$!
@@ -107,14 +115,14 @@ cd ..
 sleep 2
 
 # Start Llama Stack (Port 8321)
-echo "3️⃣  Starting Llama Stack on port 8321..."
+echo "4️⃣  Starting Llama Stack on port 8321..."
 ./env/bin/llama stack run frontend/stack/run.yml > logs/llama_stack.log 2>&1 &
 LLAMA_PID=$!
 echo "   PID: $LLAMA_PID"
 sleep 3
 
 # Start Chat App (Port 5001)
-echo "4️⃣  Starting Chat App on port 5001..."
+echo "5️⃣  Starting Chat App on port 5001..."
 cd frontend
 python chat_app.py > ../logs/chat_app.log 2>&1 &
 CHAT_PID=$!
@@ -144,10 +152,9 @@ echo "├── logs/mcp_server.log"
 echo "├── logs/llama_stack.log"
 echo "└── logs/chat_app.log"
 echo ""
-echo "🎬 Demo Users (password: demo):"
-echo "├── 👑 Admin:     gallettilance@gmail.com"
-echo "├── 🛠️  Developer: demo@example.com"
-echo "└── 👤 User:      lgallett@redhat.com"
+echo "🎬 Demo Users:"
+echo "├── 👑 Admin:     gallettilance@gmail.com (pre-configured)"
+echo "└── 👤 Users:     Auto-created with 'user' role on first login"
 echo ""
 echo "🔗 Quick Links:"
 echo "├── 🏠 Auth Dashboard:  http://localhost:8002/dashboard"

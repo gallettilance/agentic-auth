@@ -125,7 +125,7 @@ TOOL_SCOPES = {
     "required_scope": "execute:commands",
     "current_scopes": ["read:files"],
     "approval_type": "admin_required",
-    "user_email": "lgallett@redhat.com"
+    "user_email": "user@example.com"
 }
 ```
 
