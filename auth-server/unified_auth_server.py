@@ -262,10 +262,11 @@ def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str
 
 # Tool management functions (updated to use database)
 async def fetch_mcp_tools(user: TokenPayload) -> Dict[str, Any]:
-    """Fetch available MCP tools from the MCP server using proper MCP protocol"""
+    """Fetch available MCP tools from the MCP server definition"""
     try:
-        # For now, let's use a direct approach since the MCP server has specific tools
-        # The MCP server provides these tools as shown in the logs and code
+        # For now, use hardcoded tool definitions that match the MCP server
+        # The MCP server SSE protocol is complex and requires async streaming
+        # We'll implement proper MCP client integration in the future
         tools_info = [
             {
                 "name": "list_files",
