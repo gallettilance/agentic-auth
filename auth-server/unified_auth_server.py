@@ -57,8 +57,12 @@ REDIRECT_URI = f"{SERVER_URI}/auth/callback"
 COOKIE_NAME = "auth_session"
 COOKIE_MAX_AGE = 3600  # 1 hour
 
-# JWT Secret (use environment variable in production)
-JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret-key-change-in-production")
+# JWT Configuration - supports both symmetric and asymmetric
+JWT_MODE = os.getenv("JWT_MODE", "symmetric")  # "symmetric" or "asymmetric"
+JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret-key-change-in-production")  # For symmetric mode
+PRIVATE_KEY_PATH = os.getenv("PRIVATE_KEY_PATH", "keys/private_key.pem")  # For asymmetric mode
+JWKS_PATH = os.getenv("JWKS_PATH", "keys/jwks.json")  # For asymmetric mode
+KID = os.getenv("KID", None)  # Key ID for asymmetric mode
 
 # Database path
 DB_PATH = os.getenv("AUTH_DB_PATH", "auth.db")
@@ -139,6 +143,11 @@ sessions: Dict[str, TokenPayload] = {}
 google_config: Optional[GoogleDiscoveryDocument] = None
 approval_requests: Dict[str, ApprovalRequest] = {}
 
+# JWT key management (asymmetric mode)
+private_key = None
+public_key = None
+jwks_data = None
+
 # FastAPI app
 app = FastAPI(title=SERVER_NAME, version=SERVER_VERSION)
 security = HTTPBearer(auto_error=False)
@@ -171,6 +180,138 @@ def validate_client_credentials(client_id: str, client_secret: str) -> bool:
 def get_client_info(client_id: str) -> Optional[AuthClient]:
     """Get client information from database"""
     return auth_db.get_client(client_id)
+
+# JWT key management functions
+def load_asymmetric_keys():
+    """Load RSA keys for asymmetric JWT signing"""
+    global private_key, public_key, jwks_data, KID
+    
+    try:
+        # Get the directory where this script is located
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Build absolute paths
+        private_key_path = os.path.join(current_dir, "keys", "private_key.pem")
+        jwks_path = os.path.join(current_dir, "keys", "jwks.json")
+        kid_path = os.path.join(current_dir, "keys", "kid.txt")
+        
+        # Load private key
+        if os.path.exists(private_key_path):
+            with open(private_key_path, 'rb') as f:
+                from cryptography.hazmat.primitives import serialization
+                private_key = serialization.load_pem_private_key(
+                    f.read(),
+                    password=None,
+                )
+                public_key = private_key.public_key()
+                logger.info(f"✅ Loaded private key from {private_key_path}")
+        else:
+            logger.warning(f"Private key not found at {private_key_path}")
+            return False
+            
+        # Load JWKS
+        if os.path.exists(jwks_path):
+            with open(jwks_path, 'r') as f:
+                jwks_data = json.load(f)
+                logger.info(f"✅ Loaded JWKS from {jwks_path}")
+        else:
+            logger.warning(f"JWKS not found at {jwks_path}")
+            return False
+            
+        # Load KID if not set
+        if not KID:
+            if os.path.exists(kid_path):
+                with open(kid_path, 'r') as f:
+                    KID = f.read().strip()
+                    logger.info(f"✅ Loaded KID: {KID}")
+            else:
+                # Generate KID from first key in JWKS
+                if jwks_data and 'keys' in jwks_data and jwks_data['keys']:
+                    KID = jwks_data['keys'][0].get('kid', 'default')
+                    logger.info(f"✅ Using KID from JWKS: {KID}")
+                else:
+                    KID = 'default'
+                    logger.warning(f"Using default KID: {KID}")
+                    
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load asymmetric keys: {e}")
+        return False
+
+def auto_generate_keys():
+    """Auto-generate keys if they don't exist"""
+    # Get the directory where this script is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    private_key_path = os.path.join(current_dir, "keys", "private_key.pem")
+    jwks_path = os.path.join(current_dir, "keys", "jwks.json")
+    
+    if not os.path.exists(private_key_path) or not os.path.exists(jwks_path):
+        logger.info("🔑 Keys not found, generating new RSA key pair...")
+        try:
+            # Import and run the key generation
+            import subprocess
+            
+            generate_keys_path = os.path.join(current_dir, "generate_keys.py")
+            
+            result = subprocess.run([
+                sys.executable, generate_keys_path
+            ], capture_output=True, text=True, cwd=current_dir)
+            
+            if result.returncode == 0:
+                logger.info("✅ Keys generated successfully")
+                return True
+            else:
+                logger.error(f"❌ Key generation failed: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Key generation failed: {e}")
+            return False
+    return True
+
+def get_jwt_algorithm():
+    """Get JWT algorithm based on mode"""
+    return "RS256" if JWT_MODE == "asymmetric" else "HS256"
+
+def get_jwt_key_for_signing():
+    """Get the appropriate key for JWT signing"""
+    if JWT_MODE == "asymmetric":
+        return private_key
+    else:
+        return JWT_SECRET
+
+def get_jwt_key_for_verification():
+    """Get the appropriate key for JWT verification"""
+    if JWT_MODE == "asymmetric":
+        return public_key
+    else:
+        return JWT_SECRET
+
+def get_public_key_pem() -> Optional[str]:
+    """Get the public key in PEM format for JWT.io debugging"""
+    if JWT_MODE == "asymmetric" and public_key:
+        try:
+            from cryptography.hazmat.primitives import serialization
+            pem_bytes = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            return pem_bytes.decode('utf-8')
+        except Exception as e:
+            logger.error(f"Failed to serialize public key: {e}")
+            return None
+    return None
+
+def build_jwt_io_url(jwt_token: str) -> str:
+    """Build JWT.io URL with token for verification (public key must be manually added)"""
+    import urllib.parse
+    
+    # JWT.io doesn't support automatic public key import via URL
+    # Users need to manually paste the public key in the verification section
+    base_url = "https://jwt.io/"
+    
+    # Just provide the token - JWT.io will auto-fill it
+    return f"{base_url}#debugger-io?token={urllib.parse.quote(jwt_token)}"
 
 # Authentication functions (updated to use database)
 async def load_google_config():
@@ -218,7 +359,9 @@ def verify_jwt_token(authorization: Optional[str] = Header(default=None)) -> Opt
     
     token = authorization.split(" ")[1]
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        key = get_jwt_key_for_verification()
+        algorithm = get_jwt_algorithm()
+        payload = jwt.decode(token, key, algorithms=[algorithm])
         return TokenPayload(**payload)
     except InvalidTokenError:
         return None
@@ -258,7 +401,20 @@ def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str
         "iat": int(now.timestamp()),
         "iss": SERVER_URI
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    
+    # Add key ID for asymmetric mode
+    headers = {}
+    algorithm = get_jwt_algorithm()
+    if JWT_MODE == "asymmetric" and KID:
+        headers["kid"] = KID
+        logger.info(f"🔐 Generating {algorithm} JWT with Key ID: {KID} for {user.email}")
+    else:
+        logger.info(f"🔐 Generating {algorithm} JWT for {user.email}")
+    
+    key = get_jwt_key_for_signing()
+    token = jwt.encode(payload, key, algorithm=algorithm, headers=headers)
+    logger.info(f"✅ JWT generated successfully ({len(token)} chars, {algorithm})")
+    return token
 
 # Tool management functions (updated to use database)
 async def fetch_mcp_tools(user: TokenPayload) -> Dict[str, Any]:
@@ -347,9 +503,31 @@ def get_user_tool_access(user_scopes: List[str], mcp_tools: Dict[str, Any]) -> D
 
 # FastAPI startup
 @app.on_event("startup")
-async def startup_event():    
-    logger.info(f"Starting {SERVER_NAME} v{SERVER_VERSION}")
-    logger.info(f"Database: {DB_PATH}")
+async def startup_event():
+    global JWT_MODE
+    logger.info(f"🚀 Starting {SERVER_NAME} v{SERVER_VERSION}")
+    logger.info(f"📁 Database: {DB_PATH}")
+    logger.info(f"🔐 JWT Mode: {JWT_MODE.upper()}")
+    logger.info(f"🔒 Security Model: Users start with empty scope, use RFC 8693 token exchange for permissions")
+    
+    # Initialize JWT keys if using asymmetric mode
+    if JWT_MODE == "asymmetric":
+        if auto_generate_keys():
+            load_asymmetric_keys()
+            logger.info(f"✅ Asymmetric JWT keys loaded successfully")
+            logger.info(f"🔑 Algorithm: {get_jwt_algorithm()}")
+            if KID:
+                logger.info(f"🆔 Key ID: {KID}")
+                logger.info(f"📋 JWKS Endpoint: {SERVER_URI}/.well-known/jwks.json")
+            logger.info(f"🔍 Debug tokens at: https://jwt.io/")
+        else:
+            logger.error("❌ Failed to initialize asymmetric keys, falling back to symmetric mode")
+            JWT_MODE = "symmetric"
+            logger.info(f"🔐 Fallback JWT Mode: {JWT_MODE.upper()} ({get_jwt_algorithm()})")
+    else:
+        logger.info(f"🔑 Algorithm: {get_jwt_algorithm()}")
+        logger.info("⚠️  Using symmetric JWT - consider asymmetric for production")
+    
     await load_google_config()
 
 # Routes (keeping the same structure but using database functions)
@@ -388,6 +566,10 @@ async def dashboard(
     
     user_roles = db_user.roles
     is_admin = db_user.is_admin
+    
+    # Determine if user is new based on creation time (within last 5 minutes)
+    from datetime import datetime, timedelta
+    user_status = "new" if db_user.created_at and (datetime.utcnow() - db_user.created_at).total_seconds() < 300 else "existing"
     
     # Fetch MCP tools
     try:
@@ -463,7 +645,10 @@ async def dashboard(
                            <span class="role-badge {'admin-role' if is_admin else 'user-role'}">{', '.join(user_roles)}</span>
                         </p>
                         <p>Current Scopes: <code id="current-scopes">{' '.join(user_scopes) or 'None'}</code></p>
-                        <p>🔍 <a href="https://jwt.io/#debugger-io?token={jwt_token}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none; font-weight: 600;">Debug Token on JWT.io</a></p>
+                        {'<div style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); padding: 12px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #2196f3;"><strong>🔐 Token Exchange Protocol:</strong> ' + ('As a new user, you' if user_status == 'new' else 'Your permissions have been reset to comply with RFC 8693. You') + ' start with no permissions for security. </div>' if not user_scopes else ''}
+                        <p>🔐 JWT Mode: <strong style="color: {'#28a745' if JWT_MODE == 'asymmetric' else '#ffc107'};">{JWT_MODE.upper()} ({get_jwt_algorithm()})</strong></p>
+                        <p>🔍 <a href="{build_jwt_io_url(jwt_token)}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none; font-weight: 600;">Debug Token on JWT.io</a>
+                           {'<br><small style="color: #666;">💡 For RS256 verification, paste the public key from <a href="/.well-known/jwks.json" target="_blank" style="color: #667eea;">JWKS endpoint</a> into JWT.io or <button onclick="copyPublicKey(this)" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 4px 8px; border: none; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: 5px;">📋 Copy Public Key</button></small>' if JWT_MODE == 'asymmetric' else ''}</p>
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <a href="http://localhost:5001" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 10px 20px; border: none; border-radius: 8px; text-decoration: none; font-weight: 600;">💬 Chat App</a>
@@ -646,6 +831,36 @@ async def dashboard(
                     alert('Error denying request: ' + error.message);
                 }}
             }}
+            
+            async function copyPublicKey(button) {{
+                try {{
+                    const response = await fetch('/api/public-key');
+                    if (!response.ok) {{
+                        throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                    }}
+                    
+                    const data = await response.json();
+                    
+                    // Copy to clipboard
+                    await navigator.clipboard.writeText(data.public_key);
+                    
+                    // Show success feedback
+                    const originalText = button.innerHTML;
+                    button.innerHTML = '✅ Copied!';
+                    button.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                    
+                    setTimeout(() => {{
+                        button.innerHTML = originalText;
+                        button.style.background = 'linear-gradient(135deg, #17a2b8 0%, #138496 100%)';
+                    }}, 2000);
+                    
+                    // Also show instructions
+                    alert(`Public key copied to clipboard!\\n\\nInstructions:\\n${{data.instructions}}\\n\\nAlgorithm: ${{data.algorithm}}${{data.key_id ? '\\nKey ID: ' + data.key_id : ''}}`);
+                    
+                }} catch (error) {{
+                    alert('Error copying public key: ' + error.message);
+                }}
+            }}
         </script>
     </body>
     </html>
@@ -706,23 +921,33 @@ async def oauth_callback(code: str, state: str):
             
             # Create or get user from database
             db_user = auth_db.get_user(user_email)
+            user_status = "existing"
             if not db_user:
                 # Create new user with default role
                 auth_db.create_user(user_email, ["user"])
                 db_user = auth_db.get_user(user_email)
+                user_status = "new"
+                logger.info(f"👤 NEW USER: {user_email} created with role 'user' - will start with empty scope per RFC 8693")
+            else:
+                logger.info(f"👤 EXISTING USER: {user_email} logged in - permissions reset to empty scope per RFC 8693")
             
-            # Create session
+            # Create session with EMPTY scope per RFC 8693 Token Exchange protocol
+            # Users must use token exchange to request specific permission scopes
             user_data = TokenPayload(
                 sub=user_email,
                 aud=SERVER_URI,
                 email=user_email,
-                scope=" ".join(db_user.roles),
+                scope="",  # Start with no permissions - RFC 8693 compliance
                 exp=int((datetime.utcnow() + timedelta(hours=1)).timestamp()),
                 iat=int(datetime.utcnow().timestamp()),
                 iss=SERVER_URI
             )
             
+            logger.info(f"🔐 User token created with empty scope (RFC 8693 compliant): {user_email}")
+            
             session_id = create_session(user_data)
+            
+            # Note: We'll determine user status in dashboard by checking creation time
             
             response = RedirectResponse(url="/dashboard")
             response.set_cookie(
@@ -823,10 +1048,19 @@ async def oauth_token_endpoint(
         "scope": " ".join(approved_scopes)
     }
 
+@app.get("/.well-known/jwks.json")
+async def jwks_endpoint():
+    """JSON Web Key Set endpoint for asymmetric JWT verification"""
+    if JWT_MODE == "asymmetric" and jwks_data:
+        return jwks_data
+    else:
+        # Return empty JWKS for symmetric mode
+        return {"keys": []}
+
 @app.get("/.well-known/oauth-authorization-server")
 async def authorization_server_metadata():
     """OAuth 2.0 Authorization Server Metadata"""
-    return {
+    metadata = {
         "issuer": SERVER_URI,
         "authorization_endpoint": f"{SERVER_URI}/auth/login",
         "token_endpoint": f"{SERVER_URI}/oauth/token",
@@ -834,8 +1068,19 @@ async def authorization_server_metadata():
         "grant_types_supported": ["authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         "scopes_supported": [perm.scope for perm in auth_db.get_all_permissions()],
-        "subject_types_supported": ["public"]
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": [get_jwt_algorithm()],
+        "token_endpoint_auth_signing_alg_values_supported": [get_jwt_algorithm()]
     }
+    
+    # Add custom JWT mode information for easy verification
+    metadata["jwt_mode"] = JWT_MODE
+    metadata["signing_algorithm"] = get_jwt_algorithm()
+    if JWT_MODE == "asymmetric" and KID:
+        metadata["current_key_id"] = KID
+        metadata["jwks_uri"] = f"{SERVER_URI}/.well-known/jwks.json"
+        
+    return metadata
 
 # Admin management endpoints
 @app.get("/api/admin/users")
@@ -1106,6 +1351,50 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
         "current_scopes": user.scope.split() if user.scope else [],
         "has_updates": False
     }
+
+@app.get("/api/jwt-debug-url")
+async def get_jwt_debug_url(
+    user: TokenPayload = Depends(verify_user_auth),
+    authorization: Optional[str] = Header(default=None)
+):
+    """Get JWT.io debug URL with token and public key"""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    # Get the current JWT token
+    jwt_token = extract_jwt_token(authorization)
+    if not jwt_token:
+        # Generate a new token for debugging
+        user_scopes = user.scope.split() if user.scope else []
+        jwt_token = generate_token(user, user_scopes)
+    
+    # Build the JWT.io URL with token and public key
+    jwt_io_url = build_jwt_io_url(jwt_token)
+    
+    return {
+        "jwt_io_url": jwt_io_url,
+        "jwt_token": jwt_token,
+        "jwt_mode": JWT_MODE,
+        "algorithm": get_jwt_algorithm(),
+        "has_public_key": JWT_MODE == "asymmetric" and get_public_key_pem() is not None
+    }
+
+@app.get("/api/public-key")
+async def get_public_key_for_copy():
+    """Get the public key in PEM format for easy copying"""
+    if JWT_MODE == "asymmetric":
+        public_key_pem = get_public_key_pem()
+        if public_key_pem:
+            return {
+                "public_key": public_key_pem,
+                "algorithm": get_jwt_algorithm(),
+                "key_id": KID if KID else None,
+                "instructions": "Copy this public key and paste it into the 'Verify Signature' section of JWT.io"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Public key not available")
+    else:
+        raise HTTPException(status_code=400, detail="Public key only available in asymmetric mode")
 
 if __name__ == "__main__":
     # Check for admin user

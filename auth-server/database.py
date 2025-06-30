@@ -282,8 +282,11 @@ class AuthDatabase:
                 ("admin:config", True)
             ],
             "user": [
-                # Users start with no permissions - they must use token exchange to request scopes
-                # read:files should auto-approve, execute:commands requires admin approval
+                # RFC 8693 Token Exchange Protocol:
+                # Users start with NO permissions in their initial token (empty scope)
+                # They must use token exchange to request specific permission scopes
+                # This provides better security and audit trail
+                # Available scopes: read:files (auto-approve), execute:commands (requires admin approval)
             ]
         }
         
@@ -537,6 +540,7 @@ class AuthDatabase:
                         )
                         
                 logger.info(f"User created: {email} with roles: {roles}")
+                logger.info(f"🔒 User {email} will start with empty scope per RFC 8693 token exchange protocol")
                 return True
                 
         except Exception as e:

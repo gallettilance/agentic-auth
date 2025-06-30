@@ -99,21 +99,33 @@ cleanup_chrome_cookies
 
 # Clean up database files for fresh start
 echo ""
-echo "🗑️  Cleaning up database files..."
+echo "🗑️  Database status check..."
 if [ -f "responses.db" ]; then
-    rm -f responses.db
-    echo -e "${GREEN}✅ Removed responses.db${NC}"
+    echo -e "${YELLOW}📊 Response database found at responses.db${NC}"
+    echo -e "${YELLOW}   Contains chat history and responses${NC}"
+    echo -e "${YELLOW}   To reset chat history: rm responses.db${NC}"
+    # Uncomment the next line to auto-delete on stop:
+    # rm -f responses.db
+    # echo -e "${GREEN}✅ Removed responses.db${NC}"
 fi
 
 if [ -f "kvstore.db" ]; then
-    rm -f kvstore.db
-    echo -e "${GREEN}✅ Removed kvstore.db${NC}"
+    echo -e "${YELLOW}📊 Key-value store found at kvstore.db${NC}"
+    echo -e "${YELLOW}   Contains application state and cache${NC}"
+    echo -e "${YELLOW}   To reset app state: rm kvstore.db${NC}"
+    # Uncomment the next line to auto-delete on stop:
+    # rm -f kvstore.db
+    # echo -e "${GREEN}✅ Removed kvstore.db${NC}"
 fi
 
-# Clean up auth database
+# Clean up auth database (optional - preserves user permissions if kept)
 if [ -f "auth-server/auth.db" ]; then
-    rm -f auth-server/auth.db
-    echo -e "${GREEN}✅ Removed auth-server/auth.db${NC}"
+    echo -e "${YELLOW}📊 Auth database found at auth-server/auth.db${NC}"
+    echo -e "${YELLOW}   Contains user accounts, roles, and permissions${NC}"
+    echo -e "${YELLOW}   To reset all users/permissions: rm auth-server/auth.db${NC}"
+    # Uncomment the next line to auto-delete database on stop:
+    # rm -f auth-server/auth.db
+    # echo -e "${GREEN}✅ Removed auth-server/auth.db${NC}"
 fi
 
 # Clean up any remaining processes
@@ -140,10 +152,16 @@ fi
 echo ""
 echo -e "${GREEN}🎉 All demo services stopped successfully!${NC}"
 echo ""
-echo "📝 Log files are preserved in the logs/ directory:"
-echo "├── logs/unified_auth_server.log"
-echo "├── logs/mcp_server.log"
-echo "├── logs/llama_stack.log"
-echo "└── logs/chat_app.log"
+echo "📝 Data preserved for next restart:"
+echo "├── logs/ - Server logs"
+echo "├── auth-server/auth.db - User accounts and permissions"
+echo "├── auth-server/keys/ - JWT signing keys"
+echo "├── responses.db - Chat history (if exists)"
+echo "└── kvstore.db - Application state (if exists)"
 echo ""
-echo "🚀 To restart the demo, run: ./start_demo.sh" 
+echo -e "${BLUE}🔄 Next steps:${NC}"
+echo "   🚀 Restart demo: ./start_demo.sh"
+echo "   🧹 Complete reset: ./cleanup_demo.sh"
+echo ""
+echo -e "${YELLOW}💡 Tip: This preserves all user data and permissions${NC}"
+echo -e "${YELLOW}     For a fresh start, use ./cleanup_demo.sh${NC}" 

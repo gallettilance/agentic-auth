@@ -6,6 +6,7 @@ A production-ready authentication and authorization system implementing **RFC 86
 
 ### 🔒 **Enterprise-Grade Authentication**
 - **Google OAuth 2.0** integration with JWT tokens
+- **Asymmetric JWT (RS256)** and **Symmetric JWT (HS256)** support
 - **Session-based** and **token-based** authentication
 - **RFC 8693 Token Exchange** for scope upgrades
 - **Cookie-based session management** with cross-port support
@@ -19,11 +20,13 @@ A production-ready authentication and authorization system implementing **RFC 86
 ### 🔧 **MCP Tool Integration**
 - **Secure tool access** with scope-based permissions
 - **Real-time tool discovery** and access control
-- **JWT.io debugging** links for token inspection
+- **JWT.io debugging** links with public key integration
+- **One-click public key copying** for JWT verification
 - **Auto-approval workflows** for trusted operations
 
 ### 🎯 **Developer-Friendly**
 - **One-command startup** with `./start_demo.sh`
+- **Comprehensive cleanup** with `./cleanup_demo.sh`
 - **Comprehensive logging** and error handling
 - **Live token debugging** with JWT.io integration
 - **Demo login** available without OAuth setup
@@ -92,6 +95,9 @@ cp env.example .env
 # Required: Set admin email
 export ADMIN_EMAIL="your-admin@example.com"
 
+# Optional: JWT Mode (defaults to asymmetric)
+export JWT_MODE="asymmetric"  # or "symmetric"
+
 # Optional: Google OAuth (demo login available without)
 export GOOGLE_CLIENT_ID="your-google-client-id"
 export GOOGLE_CLIENT_SECRET="your-google-client-secret"
@@ -103,8 +109,11 @@ export GOOGLE_CLIENT_SECRET="your-google-client-secret"
 # Start all services with one command
 ./start_demo.sh
 
-# Stop all services
+# Stop all services (preserves data)
 ./stop_demo.sh
+
+# Complete cleanup (removes all data, keys, logs)
+./cleanup_demo.sh
 ```
 
 ## 🎬 Demo Flow
@@ -128,10 +137,10 @@ export GOOGLE_CLIENT_SECRET="your-google-client-secret"
 4. **Monitor user permissions** and policy evaluation
 
 ### 4. **JWT Token Debugging**
-1. **Click JWT.io link** in dashboard
-2. **Inspect token contents** with real scopes
-3. **Verify token signatures** and expiration
-4. **Debug scope-based access control**
+1. **Click JWT.io link** in dashboard (auto-includes token and public key)
+2. **Copy public key** with one-click button for manual verification
+3. **Inspect token contents** with real scopes and signatures
+4. **Debug scope-based access control** with live token data
 
 ## 🔧 Configuration
 
@@ -161,16 +170,73 @@ AUTH_SERVER_URL="http://localhost:8002"
 MCP_SERVER_URL="http://localhost:8001"
 LLAMA_STACK_URL="http://localhost:8321"
 
+# JWT Configuration
+JWT_MODE="asymmetric"                    # "asymmetric" (RS256) or "symmetric" (HS256)
+JWT_SECRET="your-jwt-secret"             # For symmetric mode only
+
 # Authentication
 GOOGLE_CLIENT_ID="your-client-id"
 GOOGLE_CLIENT_SECRET="your-client-secret"
-JWT_SECRET="your-jwt-secret"
 
 # Admin Setup
 ADMIN_EMAIL="your-admin@example.com"
 
 # Database
 DB_PATH="auth-server/auth.db"
+```
+
+## 🔐 JWT Modes
+
+The system supports both symmetric and asymmetric JWT signing:
+
+### **Asymmetric Mode (RS256) - Default**
+- **Auto-generates RSA key pairs** on startup if not found
+- **Public key distribution** via JWKS endpoint
+- **Enhanced security** with public/private key separation
+- **Production-ready** with industry-standard practices
+- **One-click public key copying** in dashboard
+
+```bash
+# Enable asymmetric mode (default)
+export JWT_MODE="asymmetric"
+
+# Keys auto-generated at:
+# - auth-server/keys/private_key.pem
+# - auth-server/keys/public_key.pem  
+# - auth-server/keys/jwks.json
+```
+
+### **Symmetric Mode (HS256)**
+- **Shared secret** for signing and verification
+- **Simpler deployment** for development environments
+- **Requires JWT_SECRET** environment variable
+
+```bash
+# Enable symmetric mode
+export JWT_MODE="symmetric"
+export JWT_SECRET="your-secret-key"
+```
+
+## 🧹 Cleanup & Maintenance
+
+### **Stop Services (Preserves Data)**
+```bash
+./stop_demo.sh
+# Preserves: databases, keys, logs, user data
+```
+
+### **Complete Cleanup**
+```bash
+./cleanup_demo.sh
+# Removes: all databases, JWT keys, logs, cache files
+# Clears: browser cookies, kills processes
+# Provides: confirmation prompts and verification
+```
+
+### **Fresh Start**
+```bash
+./cleanup_demo.sh && ./start_demo.sh
+# Complete reset with new keys and clean databases
 ```
 
 ## 📁 Project Structure
@@ -180,7 +246,11 @@ Authentication/
 ├── auth-server/
 │   ├── unified_auth_server.py      # Main auth server (FastAPI)
 │   ├── database.py                 # Database models and operations
-│   ├── admin_api.py               # Admin API endpoints
+│   ├── generate_keys.py           # RSA key pair generation
+│   ├── keys/                      # JWT keys (auto-generated)
+│   │   ├── private_key.pem        # RSA private key
+│   │   ├── public_key.pem         # RSA public key
+│   │   └── jwks.json              # JSON Web Key Set
 │   ├── init_admin.py              # Admin user initialization
 │   └── auth.db                    # SQLite database
 ├── frontend/
@@ -191,7 +261,8 @@ Authentication/
 │   └── README.md                  # MCP documentation
 ├── logs/                          # Application logs
 ├── start_demo.sh                  # One-command startup script
-├── stop_demo.sh                   # Cleanup script
+├── stop_demo.sh                   # Stop services (preserves data)
+├── cleanup_demo.sh                # Complete cleanup script
 └── requirements.txt               # Python dependencies
 ```
 
@@ -213,6 +284,12 @@ GET  /dashboard                   # Admin/user dashboard with JWT.io links
 POST /oauth/token                 # Standard token exchange endpoint
 POST /api/upgrade-scope          # Chat app compatibility endpoint
 
+# JWT & Security
+GET  /.well-known/jwks.json      # JSON Web Key Set (public keys)
+GET  /.well-known/oauth-authorization-server  # OAuth metadata
+GET  /api/jwt-debug-url          # JWT.io URL with token and public key
+GET  /api/public-key             # Public key for manual copying
+
 # Admin API
 GET  /api/admin/users            # List all users
 POST /api/admin/users            # Create user
@@ -232,6 +309,8 @@ GET  /stream                     # Server-sent events for responses
 ## 🛡️ Security Features
 
 ### Token Management
+- **Asymmetric JWT (RS256)** with auto-generated RSA keys and JWKS endpoint
+- **Symmetric JWT (HS256)** with shared secret for simpler deployments
 - **JWT tokens** with configurable expiration (1 hour default)
 - **Secure cookie** settings for session management
 - **Token refresh** and scope upgrade flows
@@ -244,10 +323,10 @@ GET  /stream                     # Server-sent events for responses
 - **Audit logging** for compliance and debugging
 
 ### Zero-Trust Model
-- **Users start with no permissions** (empty scope)
-- **Dynamic permission escalation** via token exchange
-- **Configurable approval workflows** per scope
-- **Admin oversight** for high-risk operations
+- **Users start with no permissions** (empty scope) - even existing users get reset to comply with token exchange protocol
+- **Dynamic permission escalation** via token exchange for enhanced security and audit trail
+- **Configurable approval workflows** per scope with database-backed policies
+- **Admin oversight** for high-risk operations with real-time approval dashboard
 
 ## 📊 Monitoring & Debugging
 
@@ -258,8 +337,10 @@ GET  /stream                     # Server-sent events for responses
 - `logs/llama_stack.log` - AI agent interactions
 
 ### JWT Debugging
-- **Built-in JWT.io links** in dashboard
-- **Real-time token inspection** with current scopes
+- **Built-in JWT.io links** in dashboard with auto-embedded tokens and public keys
+- **One-click public key copying** for manual JWT verification
+- **Real-time token inspection** with current scopes and signatures
+- **JWKS endpoint** for automated public key discovery
 - **Token validation** and signature verification
 - **Scope upgrade tracking**
 

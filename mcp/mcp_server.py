@@ -27,12 +27,21 @@ SERVER_URI = f"http://{SERVER_HOST}:{SERVER_PORT}"
 # Auth Server Configuration
 AUTH_SERVER_URI = "http://localhost:8002"  # The authentication server
 JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret-key-change-in-production")
+JWT_MODE = os.getenv("JWT_MODE", "symmetric")  # "symmetric" or "asymmetric"
+
+# For asymmetric JWT, we'll fetch the public key from JWKS endpoint on-demand
 
 # Create FastMCP instance
 mcp = FastMCP(
     name=SERVER_NAME,
     version=SERVER_VERSION
 )
+
+logger.info(f"🔐 MCP Server JWT Mode: {JWT_MODE}")
+if JWT_MODE == "asymmetric":
+    logger.info(f"🔑 Using JWKS endpoint: {AUTH_SERVER_URI}/.well-known/jwks.json")
+else:
+    logger.info(f"🔑 Using symmetric JWT with shared secret")
 
 # Helper function to verify token from context
 def verify_token_from_context(ctx: Context) -> dict:
@@ -49,13 +58,42 @@ def verify_token_from_context(ctx: Context) -> dict:
         token = auth_header.split(" ")[1]
         logger.info(f"🎫 JWT token: {token[:50]}...")
         
-        payload = jwt.decode(
-            token, 
-            JWT_SECRET, 
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-            leeway=21600  # 6 hours leeway for clock skew
-        )
+        # Choose verification method based on JWT mode
+        if JWT_MODE == "asymmetric":
+            # Use JWKS for asymmetric verification
+            try:
+                from jwt import PyJWKClient
+                jwks_client = PyJWKClient(f"{AUTH_SERVER_URI}/.well-known/jwks.json")
+                signing_key = jwks_client.get_signing_key_from_jwt(token)
+                
+                payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=["RS256"],
+                    options={"verify_aud": False},
+                    leeway=21600  # 6 hours leeway for clock skew
+                )
+                logger.info(f"✅ Verified RS256 token using JWKS")
+            except Exception as jwks_error:
+                logger.error(f"❌ JWKS verification failed: {jwks_error}")
+                # Fallback to symmetric verification
+                logger.info("🔄 Falling back to symmetric verification")
+                payload = jwt.decode(
+                    token, 
+                    JWT_SECRET, 
+                    algorithms=["HS256"],
+                    options={"verify_aud": False},
+                    leeway=21600  # 6 hours leeway for clock skew
+                )
+        else:
+            # Use shared secret for symmetric verification
+            payload = jwt.decode(
+                token, 
+                JWT_SECRET, 
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+                leeway=21600  # 6 hours leeway for clock skew
+            )
         
         logger.info(f"📋 JWT payload: {payload}")
         

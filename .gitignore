@@ -15,3 +15,12 @@ __pycache__/
 *.pyzwz
 *.txt
 *.mp4
+
+# JWT Keys - Never commit private keys!
+auth-server/keys/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
