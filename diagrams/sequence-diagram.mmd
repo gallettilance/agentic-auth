@@ -1,0 +1,77 @@
+sequenceDiagram
+    participant U as 👤 User
+    participant C as 📱 Chat App
+    participant A as 🔐 Auth Server
+    participant L as 🤖 Llama Stack
+    participant M as 🛠️ MCP Server
+    participant T as 🔧 Tools
+    
+    Note over U,T: 1. Initial Authentication
+    U->>C: Enter chat message
+    C->>A: Check session/token
+    A->>C: Valid JWT token with scopes
+    
+    Note over U,T: 2. Agent Processing
+    C->>L: POST /agents/{id}/turns with Bearer token
+    L->>L: GPT-4 processes message, determines tool needed
+    
+    Note over U,T: 3. Tool Execution Attempt
+    L->>M: HTTP request to MCP tool with Authorization header
+    M->>M: Validate JWT signature, check aud & iss claims
+    M->>M: Extract scopes from token, check against tool requirements
+    
+    alt Insufficient Scope
+        M->>L: 403 Forbidden with error details
+        L->>L: Raise InsufficientScopeError
+        L->>C: Stream response with authorization error
+        
+        Note over U,T: 4. Automatic Scope Upgrade
+        C->>A: POST /api/upgrade-scope with required scopes
+        A->>A: Check approval policy for user & scope
+        
+        alt Auto-approve policy
+            A->>A: Generate new JWT with additional scope
+            A->>C: Return new access token
+            C->>C: Update stored token
+            
+            Note over U,T: 5. Retry with New Token
+            C->>L: Retry message with new Bearer token
+            L->>M: HTTP request with updated Authorization
+            M->>M: Validate new token with required scopes
+            M->>T: Execute tool (list files, run command, etc.)
+            T->>M: Return tool result
+            M->>L: Success response with tool output
+            L->>L: Incorporate result into GPT-4 response
+            L->>C: Stream final response with tool results
+            
+        else Requires admin approval
+            A->>A: Create approval request in database
+            A->>C: Return approval_required status
+            C->>U: Show waiting for approval message
+            
+            Note over U,T: 6. Admin Approval Flow
+            A->>A: Notify admin via email/dashboard
+            Note right of A: Admin reviews and approves request
+            A->>A: Generate JWT with approved scope
+            
+            Note over U,T: 7. Auto-retry after approval
+            C->>A: Poll for token update
+            A->>C: Return new token when approved
+            C->>C: Update stored token
+            C->>L: Auto-retry original message
+            L->>M: HTTP request with approved token
+            M->>T: Execute tool
+            T->>M: Tool result
+            M->>L: Success response
+            L->>C: Final response
+        end
+        
+    else Token has required scope
+        M->>T: Execute tool directly
+        T->>M: Tool result
+        M->>L: Success response with tool output
+        L->>L: Incorporate into GPT-4 response
+        L->>C: Stream response with results
+    end
+    
+    C->>U: Display final response in chat interface 

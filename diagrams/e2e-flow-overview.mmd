@@ -1,0 +1,60 @@
+graph TD
+    A["👤 User enters prompt in<br/>Chat App (Flask)"] --> B["🔍 Chat App checks<br/>user authentication"]
+    
+    B --> C{"🔐 User authenticated?"}
+    C -->|No| D["🔄 Redirect to<br/>Google OAuth login"]
+    D --> E["🔑 Google OAuth flow<br/>via Auth Server"]
+    E --> F["✅ Auth Server creates<br/>JWT token with scopes"]
+    F --> G["💾 Store session &<br/>return to chat"]
+    G --> B
+    
+    C -->|Yes| H["🤖 Get/Create Llama Stack<br/>Agent for user"]
+    H --> I["📤 Send message to<br/>Auth Agent (Llama Stack)"]
+    
+    I --> J["🧠 Auth Agent processes<br/>message with GPT-4"]
+    J --> K{"🔧 Does response<br/>require tool use?"}
+    
+    K -->|No| L["💬 Return text response<br/>directly to user"]
+    
+    K -->|Yes| M["🛠️ Auth Agent identifies<br/>required MCP tool"]
+    M --> N["📡 Auth Agent calls<br/>MCP Server via HTTP"]
+    
+    N --> O["🔐 MCP Server validates<br/>JWT token"]
+    O --> P{"✅ Token valid &<br/>has required scope?"}
+    
+    P -->|No - Invalid Token| Q["❌ Return 401<br/>Unauthorized"]
+    Q --> R["🔄 Auth Agent handles<br/>token refresh"]
+    R --> N
+    
+    P -->|No - Insufficient Scope| S["❌ Return 403<br/>Forbidden"]
+    S --> T["⚠️ Auth Agent raises<br/>InsufficientScopeError"]
+    T --> U["📋 Chat App detects<br/>authorization error"]
+    U --> V["🔄 Auto-request scope<br/>upgrade from Auth Server"]
+    
+    V --> W["🏛️ Auth Server evaluates<br/>approval policy"]
+    W --> X{"🤔 Auto-approve or<br/>require admin approval?"}
+    
+    X -->|Auto-approve| Y["✅ Auth Server issues<br/>new token with scope"]
+    Y --> Z["🔄 Chat App retries<br/>with new token"]
+    Z --> N
+    
+    X -->|Admin required| AA["⏳ Create approval<br/>request in database"]
+    AA --> BB["📧 Notify admin<br/>(email/dashboard)"]
+    BB --> CC["⏳ Wait for admin<br/>approval/denial"]
+    CC --> DD{"👨‍💼 Admin decision?"}
+    
+    DD -->|Approved| Y
+    DD -->|Denied| EE["❌ Show denial message<br/>to user"]
+    
+    P -->|Yes| FF["🔧 MCP Server executes<br/>tool (list_files, execute_command, etc.)"]
+    FF --> GG["📊 Return tool result<br/>to Auth Agent"]
+    GG --> HH["🧠 Auth Agent incorporates<br/>result into response"]
+    HH --> II["💬 Stream final response<br/>to Chat App"]
+    II --> JJ["📱 Display response<br/>to user"]
+    
+    style A fill:#e1f5fe
+    style L fill:#c8e6c9
+    style JJ fill:#c8e6c9
+    style EE fill:#ffcdd2
+    style Q fill:#ffcdd2
+    style S fill:#ffcdd2 
