@@ -5,11 +5,97 @@ This document provides a detailed walkthrough of the entire authentication and a
 ## System Components
 
 - **🔍 Google OAuth**: External identity provider
-- **🔐 Auth Server** (Port 8002): OAuth authorization server with RFC 8693 token exchange
+- **🔐 Auth Server** (Port 8002): OAuth authorization server with RFC 8693 token exchange and JWT key management
 - **💬 Chat App** (Port 5001): Frontend application with session management  
 - **🛠️ MCP Server** (Port 8001): Protected resource with scope-based authorization
+- **🔑 JWT Key Management**: RSA key pair generation and JWKS endpoint for asymmetric signing
+
+## JWT Modes
+
+The system supports both symmetric and asymmetric JWT signing:
+
+### **Asymmetric Mode (RS256) - Default**
+- **Auto-generated RSA key pairs** on startup
+- **Public key distribution** via JWKS endpoint
+- **Enhanced security** with public/private key separation
+- **Production-ready** with industry standards
+
+### **Symmetric Mode (HS256)**
+- **Shared secret** for development environments
+- **Simpler deployment** for testing scenarios
 
 ## Step-by-Step Flow with Component Responsibility
+
+## **Step 0: JWT Key Setup (Asymmetric Mode)**
+**Component: 🔐 Auth Server**
+
+Auth server generates RSA key pairs and sets up JWKS endpoint for public key distribution.
+
+```python
+# auth-server/unified_auth_server.py
+def auto_generate_keys():
+    """Auto-generate RSA key pairs for JWT signing"""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    import json
+    import hashlib
+    
+    # Generate 2048-bit RSA key pair
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048
+    )
+    
+    # Extract public key
+    public_key = private_key.public_key()
+    
+    # Serialize private key
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    
+    # Serialize public key
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    
+    # Generate key ID from public key hash
+    key_id = hashlib.sha256(public_pem).hexdigest()[:16]
+    
+    # Create JWKS (JSON Web Key Set)
+    jwks = {
+        "keys": [{
+            "kty": "RSA",
+            "use": "sig",
+            "kid": key_id,
+            "alg": "RS256",
+            "n": "...",  # RSA modulus (base64url encoded)
+            "e": "AQAB"  # RSA exponent (base64url encoded)
+        }]
+    }
+    
+    # Save keys to files
+    os.makedirs("keys", exist_ok=True)
+    with open("keys/private_key.pem", "wb") as f:
+        f.write(private_pem)
+    with open("keys/public_key.pem", "wb") as f:
+        f.write(public_pem)
+    with open("keys/jwks.json", "w") as f:
+        json.dump(jwks, f, indent=2)
+    with open("keys/kid.txt", "w") as f:
+        f.write(key_id)
+
+@app.get("/.well-known/jwks.json")
+async def jwks_endpoint():
+    """JWKS endpoint for public key distribution"""
+    if JWT_MODE == "asymmetric" and jwks_data:
+        return jwks_data
+    else:
+        raise HTTPException(status_code=404, detail="JWKS not available in symmetric mode")
+```
 
 ## **Step 1: User Login Request**
 **Component: 🌐 Browser → 💬 Chat App**
@@ -85,10 +171,42 @@ async def oauth_callback(code: str, state: str):
 ## **Step 4: JWT Creation and Session Setup**
 **Component: 🔐 Auth Server**
 
-Auth server validates Google tokens, creates internal JWT, and establishes session.
+Auth server validates Google tokens, creates internal JWT with asymmetric signing, and establishes session.
 
 ```python
 # auth-server/unified_auth_server.py
+def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str] = None) -> str:
+    """Generate JWT token with asymmetric or symmetric signing"""
+    now = datetime.utcnow()
+    
+    payload = {
+        "sub": user.sub,
+        "aud": audience or MCP_SERVER_URI,
+        "email": user.email,
+        "scope": " ".join(scopes),
+        "exp": int((now + timedelta(hours=1)).timestamp()),
+        "iat": int(now.timestamp()),
+        "iss": SERVER_URI
+    }
+    
+    # Choose signing method based on JWT mode
+    if JWT_MODE == "asymmetric":
+        # Use RSA private key for signing
+        headers = {"kid": KID} if KID else {}
+        return jwt.encode(
+            payload,
+            get_jwt_key_for_signing(),  # RSA private key
+            algorithm="RS256",
+            headers=headers
+        )
+    else:
+        # Use shared secret for signing
+        return jwt.encode(
+            payload,
+            JWT_SECRET,
+            algorithm="HS256"
+        )
+
 async def oauth_callback(code: str, state: str):
     # ... token exchange with Google ...
     
@@ -99,18 +217,20 @@ async def oauth_callback(code: str, state: str):
     )
     
     user_email = id_payload["email"]
-    user_roles = get_user_roles(user_email)
     
-    # Create internal JWT
+    # Create internal JWT with zero-trust model (empty scope)
     internal_payload = TokenPayload(
         sub=id_payload["sub"],
         aud="http://localhost:8001",  # MCP Server audience
         email=user_email,
-        scope="read:files",  # Initial scope based on role
+        scope="",  # Start with no permissions (RFC 8693 compliance)
         exp=int((datetime.now() + timedelta(hours=1)).timestamp()),
         iat=int(datetime.now().timestamp()),
         iss="http://localhost:8002"
     )
+    
+    # Generate JWT token (asymmetric or symmetric)
+    jwt_token = generate_token(internal_payload, [])
     
     # Create session
     session_id = create_session(internal_payload)
@@ -179,13 +299,71 @@ mcp_response = requests.post(
 )
 ```
 
-## **Step 7a: Successful Tool Execution**
+## **Step 7a: JWT Verification with JWKS**
 **Component: 🛠️ MCP Server**
 
-MCP server validates JWT and executes tool if user has required scope.
+MCP server verifies JWT using JWKS endpoint for asymmetric tokens or shared secret for symmetric tokens.
 
 ```python
 # mcp/mcp_server.py
+def verify_token_from_context(ctx: Context) -> dict:
+    """Extract and verify JWT token from MCP context"""
+    try:
+        auth_header = ctx.request_context.request.headers.get("authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise Exception("Missing or invalid Authorization header")
+        
+        token = auth_header.split(" ")[1]
+        
+        # Choose verification method based on JWT mode
+        if JWT_MODE == "asymmetric":
+            # Use JWKS for asymmetric verification
+            try:
+                from jwt import PyJWKClient
+                jwks_client = PyJWKClient(f"{AUTH_SERVER_URI}/.well-known/jwks.json")
+                signing_key = jwks_client.get_signing_key_from_jwt(token)
+                
+                payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=["RS256"],
+                    options={"verify_aud": False},
+                    leeway=21600  # 6 hours leeway for clock skew
+                )
+                logger.info(f"✅ Verified RS256 token using JWKS")
+            except Exception as jwks_error:
+                logger.error(f"❌ JWKS verification failed: {jwks_error}")
+                # Fallback to symmetric verification
+                payload = jwt.decode(
+                    token, 
+                    JWT_SECRET, 
+                    algorithms=["HS256"],
+                    options={"verify_aud": False},
+                    leeway=21600
+                )
+        else:
+            # Use shared secret for symmetric verification
+            payload = jwt.decode(
+                token, 
+                JWT_SECRET, 
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+                leeway=21600
+            )
+        
+        # Validate audience and issuer
+        if payload.get("aud") != SERVER_URI:
+            raise Exception(f"Invalid audience: expected {SERVER_URI}, got {payload.get('aud')}")
+        if payload.get("iss") != AUTH_SERVER_URI:
+            raise Exception(f"Invalid issuer: expected {AUTH_SERVER_URI}, got {payload.get('iss')}")
+        
+        return payload
+        
+    except jwt.ExpiredSignatureError:
+        raise Exception("Token expired")
+    except jwt.InvalidTokenError as e:
+        raise Exception("Invalid token")
+
 @mcp.tool()
 async def list_files(ctx: Context, directory: str = ".") -> Dict[str, Any]:
     try:
@@ -204,21 +382,6 @@ async def list_files(ctx: Context, directory: str = ".") -> Dict[str, Any]:
         }
     except Exception as e:
         return await handle_scope_error(ctx, str(e))
-
-def check_scope(ctx: Context, required_scope: str) -> dict:
-    user = verify_token_from_context(ctx)
-    user_scopes = user.get("scope", "").split()
-    
-    if required_scope not in user_scopes:
-        error_info = {
-            "error_type": "insufficient_scope",
-            "required_scope": required_scope,
-            "user_scopes": user_scopes,
-            "scope_upgrade_endpoint": f"{AUTH_SERVER_URI}/oauth/token"
-        }
-        raise Exception(json.dumps(error_info))
-    
-    return user
 ```
 
 ## **Step 7b: Insufficient Scope Error**
@@ -228,6 +391,25 @@ MCP server detects missing scope and returns upgrade information.
 
 ```python
 # mcp/mcp_server.py
+def check_scope(ctx: Context, required_scope: str) -> dict:
+    """Check if user has required scope, return upgrade info if insufficient"""
+    user = verify_token_from_context(ctx)
+    user_scopes = user.get("scope", "").split()
+    
+    if required_scope not in user_scopes:
+        error_info = {
+            "error_type": "insufficient_scope",
+            "error": f"Insufficient scope. Required: {required_scope}",
+            "required_scope": required_scope,
+            "user_scopes": user_scopes,
+            "scope_upgrade_endpoint": f"{AUTH_SERVER_URI}/api/upgrade-scope",
+            "scope_description": get_scope_description(required_scope),
+            "upgrade_instructions": "Use the scope_upgrade_endpoint to request additional permissions"
+        }
+        raise Exception(json.dumps(error_info))
+    
+    return user
+
 async def handle_scope_error(ctx: Context, error_msg: str) -> Dict[str, Any]:
     try:
         error_data = json.loads(error_msg)
@@ -238,7 +420,7 @@ async def handle_scope_error(ctx: Context, error_msg: str) -> Dict[str, Any]:
                 "required_scope": error_data["required_scope"],
                 "user_scopes": error_data["user_scopes"],
                 "scope_upgrade_endpoint": error_data["scope_upgrade_endpoint"],
-                "upgrade_instructions": "Use the scope_upgrade_endpoint to request additional permissions"
+                "upgrade_instructions": error_data["upgrade_instructions"]
             }
     except (json.JSONDecodeError, KeyError):
         pass
@@ -273,10 +455,10 @@ async def request_scope_upgrade(current_token, required_scope):
     return response.json()
 ```
 
-## **Step 9: New JWT Issuance**
+## **Step 9: New JWT Issuance with Asymmetric Signing**
 **Component: 🔐 Auth Server**
 
-Auth server evaluates approval policy and issues new JWT with required scope.
+Auth server evaluates approval policy and issues new JWT with required scope using asymmetric signing.
 
 ```python
 # auth-server/unified_auth_server.py
@@ -287,15 +469,32 @@ async def oauth_token_endpoint(
     scope: str = Form(...),
     # ... other parameters
 ):
-    # Validate subject token
-    subject_payload = jwt.decode(subject_token, JWT_SECRET, algorithms=["HS256"])
+    # Validate subject token (supports both asymmetric and symmetric)
+    try:
+        if JWT_MODE == "asymmetric":
+            # Verify with RSA public key
+            subject_payload = jwt.decode(
+                subject_token, 
+                get_jwt_key_for_verification(),  # RSA public key
+                algorithms=["RS256"]
+            )
+        else:
+            # Verify with shared secret
+            subject_payload = jwt.decode(
+                subject_token, 
+                JWT_SECRET, 
+                algorithms=["HS256"]
+            )
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Invalid subject token")
+    
     user_email = subject_payload.get("email")
     
     # Evaluate approval policy
     requested_scopes = scope.split()
     policy_result = evaluate_approval_policy(user_email, requested_scopes)
     
-    if policy_result["requires_admin_approval"]:
+    if policy_result.get("requires_approval"):
         # Create approval request and return authorization_pending
         return JSONResponse(
             status_code=400,
@@ -309,10 +508,12 @@ async def oauth_token_endpoint(
     
     # Auto-approve: create new token with additional scopes
     current_scopes = subject_payload.get("scope", "").split()
-    new_scopes = list(set(current_scopes + policy_result["auto_approved"]))
+    auto_approved = policy_result.get("auto_approved", [])
+    new_scopes = list(set(current_scopes + auto_approved))
     
+    # Generate new JWT with asymmetric signing
     new_token = generate_token(
-        subject_payload,
+        TokenPayload(**subject_payload),
         new_scopes,
         audience="http://localhost:8001"
     )
@@ -353,39 +554,20 @@ async def retry_with_upgraded_token(tool_name, arguments, new_token):
 ## **Step 11: Successful Execution**
 **Component: 🛠️ MCP Server → 💬 Chat App**
 
-MCP server validates the upgraded token and successfully executes the tool.
-
-```python
-# mcp/mcp_server.py - Same validation logic as Step 7a
-# Now the token contains the required scope, so execution succeeds
-
-def verify_token_from_context(ctx: Context) -> dict:
-    auth_header = ctx.request_context.request.headers.get("authorization")
-    token = auth_header.split(" ")[1]
-    
-    payload = jwt.decode(
-        token, 
-        JWT_SECRET, 
-        algorithms=["HS256"]
-    )
-    
-    # Validate audience, issuer, expiration
-    if payload.get("aud") != SERVER_URI:
-        raise Exception("Invalid audience")
-    if payload.get("iss") != AUTH_SERVER_URI:
-        raise Exception("Invalid issuer")
-    
-    return payload
-```
+MCP server validates the upgraded token using JWKS and successfully executes the tool.
 
 ---
 
-## **Key Security Features**
+## **Enhanced Security Features**
 
-### **JWT Token Structure**
+### **Asymmetric JWT Token Structure (RS256)**
 ```json
 {
-  "header": {"alg": "HS256", "typ": "JWT"},
+  "header": {
+    "alg": "RS256", 
+    "typ": "JWT",
+    "kid": "a1b2c3d4e5f6"
+  },
   "payload": {
     "sub": "user-123",
     "email": "user@example.com", 
@@ -398,32 +580,98 @@ def verify_token_from_context(ctx: Context) -> dict:
 }
 ```
 
+### **JWKS Endpoint Response**
+```json
+{
+  "keys": [{
+    "kty": "RSA",
+    "use": "sig",
+    "kid": "a1b2c3d4e5f6",
+    "alg": "RS256",
+    "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    "e": "AQAB"
+  }]
+}
+```
+
+### **JWT Debugging Features**
+```python
+# auth-server/unified_auth_server.py
+@app.get("/api/jwt-debug-url")
+async def get_jwt_debug_url(user: TokenPayload = Depends(verify_user_auth)):
+    """Get JWT.io debug URL with token and public key"""
+    jwt_token = generate_token(user, user.scope.split() if user.scope else [])
+    
+    # Build JWT.io URL with token and public key for immediate verification
+    jwt_io_url = build_jwt_io_url(jwt_token)
+    
+    return {
+        "jwt_io_url": jwt_io_url,
+        "jwt_token": jwt_token,
+        "jwt_mode": JWT_MODE,
+        "algorithm": get_jwt_algorithm(),
+        "has_public_key": JWT_MODE == "asymmetric"
+    }
+
+@app.get("/api/public-key")
+async def get_public_key_for_copy():
+    """Get the public key in PEM format for easy copying"""
+    if JWT_MODE == "asymmetric":
+        public_key_pem = get_public_key_pem()
+        return {
+            "public_key": public_key_pem,
+            "algorithm": get_jwt_algorithm(),
+            "key_id": KID,
+            "instructions": "Copy this public key and paste it into the 'Verify Signature' section of JWT.io"
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Public key only available in asymmetric mode")
+
+def build_jwt_io_url(jwt_token: str) -> str:
+    """Build JWT.io URL with token and public key for immediate verification"""
+    import urllib.parse
+    
+    base_url = "https://jwt.io/#debugger-io"
+    params = {"token": jwt_token}
+    
+    # Add public key for asymmetric mode
+    if JWT_MODE == "asymmetric":
+        public_key_pem = get_public_key_pem()
+        if public_key_pem:
+            params["publicKey"] = public_key_pem
+    
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
+```
+
 ### **Secure Cookie Configuration**
 ```javascript
 Set-Cookie: auth_session=<session_id>; 
             HttpOnly; Secure; SameSite=Strict; 
-            Max-Age=3600; Path=/
+            Max-Age=3600; Path=/; Domain=localhost
 ```
 
 ### **Component Responsibilities Summary**
 
 | Component | Responsibilities |
 |-----------|-----------------|
-| **🔐 Auth Server** | OAuth flow, JWT creation/validation, RFC 8693 token exchange, approval workflows |
+| **🔐 Auth Server** | OAuth flow, RSA key generation, JWT creation/validation (RS256/HS256), RFC 8693 token exchange, JWKS endpoint, approval workflows |
 | **💬 Chat App** | Session management, UI, token exchange requests, tool call coordination |
-| **🛠️ MCP Server** | JWT validation, scope checking, tool execution, scope upgrade guidance |
+| **🛠️ MCP Server** | JWT validation via JWKS/shared secret, scope checking, tool execution, scope upgrade guidance |
 | **🔍 Google OAuth** | User authentication, identity verification |
+| **🔑 JWKS Endpoint** | Public key distribution for JWT verification |
 
-### **Token Flow Summary**
+### **Enhanced Token Flow Summary**
 
-1. **Login**: OAuth → JWT creation → Secure session
-2. **Tool Call**: JWT validation → Scope check → Execute or upgrade
-3. **Token Exchange**: RFC 8693 → Policy evaluation → New JWT
-4. **Retry**: Upgraded token → Successful execution
+1. **Startup**: RSA key generation → JWKS endpoint setup
+2. **Login**: OAuth → JWT creation (RS256/HS256) → Secure session
+3. **Tool Call**: JWT validation via JWKS/secret → Scope check → Execute or upgrade
+4. **Token Exchange**: RFC 8693 → Policy evaluation → New JWT (RS256/HS256)
+5. **Retry**: Upgraded token → JWKS verification → Successful execution
+6. **Debug**: JWT.io integration with public key → Token inspection
 
 ## **Admin Approval Flow (When Required)**
 
-When a scope requires admin approval, the flow extends:
+When a scope requires admin approval, the flow extends with enhanced JWT verification:
 
 **Step 9b: Authorization Pending Response**
 ```json
@@ -435,9 +683,25 @@ When a scope requires admin approval, the flow extends:
 }
 ```
 
-**Step 10b: Admin Dashboard Approval**
+**Step 10b: Admin Dashboard with JWT Debugging**
 ```python
 # auth-server/unified_auth_server.py
+@app.get("/dashboard")
+async def dashboard(user: TokenPayload = Depends(verify_user_auth)):
+    """Admin dashboard with JWT debugging tools"""
+    jwt_token = generate_token(user, user.scope.split() if user.scope else [])
+    
+    return HTMLResponse(f"""
+    <div class="jwt-debug">
+        <h3>JWT Token Debugging</h3>
+        <p>JWT Mode: <strong>{JWT_MODE.upper()} ({get_jwt_algorithm()})</strong></p>
+        <p>
+            <a href="{build_jwt_io_url(jwt_token)}" target="_blank">Debug Token on JWT.io</a>
+            {'''<button onclick="copyPublicKey(this)">📋 Copy Public Key</button>''' if JWT_MODE == 'asymmetric' else ''}
+        </p>
+    </div>
+    """)
+
 @app.post("/api/approve/{request_id}")
 async def approve_request(request_id: str, admin_email: str = Form(...)):
     approval_request = approval_requests.get(request_id)
@@ -453,9 +717,27 @@ async def approve_request(request_id: str, admin_email: str = Form(...)):
     return {"message": "Request approved successfully"}
 ```
 
-**Step 11b: Polling Resolution**
-Chat app polls until approval is granted, then receives the upgraded token.
+**Step 11b: Polling Resolution with Enhanced JWT**
+Chat app polls until approval is granted, then receives the upgraded token with proper asymmetric signing.
 
 ---
 
-This flow demonstrates **complete token negotiation** from OAuth login through secure tool execution, with clear component responsibilities and RFC 8693 compliant token exchange. 
+## **Key Security Enhancements**
+
+### **1. Asymmetric JWT Benefits**
+- **Enhanced Security**: Private key never leaves auth server
+- **Scalability**: Public key can be distributed to multiple services
+- **Non-repudiation**: Cryptographic proof of token authenticity
+- **Industry Standard**: Follows OAuth 2.0 and OIDC best practices
+
+### **2. JWKS Integration**
+- **Automatic Key Discovery**: Services fetch public keys automatically
+- **Key Rotation Support**: Multiple keys can be supported simultaneously
+- **Standards Compliance**: RFC 7517 JSON Web Key (JWK) specification
+
+### **3. Enhanced Debugging**
+- **JWT.io Integration**: One-click token debugging with public key
+- **Public Key Copying**: Easy verification in external tools
+- **Real-time Validation**: Immediate feedback on token structure
+
+This enhanced flow demonstrates **production-grade JWT security** with asymmetric signing, automatic key management, and comprehensive debugging tools, while maintaining backward compatibility with symmetric JWT for development environments. 

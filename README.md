@@ -74,6 +74,11 @@ A production-ready authentication and authorization system implementing **RFC 86
    - Configurable approval policies
    - Audit logging and session tracking
 
+5. **Llama Stack** (`frontend/stack/run.yml`)
+   - AI agent runtime with OpenAI GPT-4 integration
+   - MCP tool integration for secure agent interactions
+   - Requires `OPENAI_API_KEY` environment variable
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -94,6 +99,9 @@ cp env.example .env
 
 # Required: Set admin email
 export ADMIN_EMAIL="your-admin@example.com"
+
+# Required: OpenAI API Key (for GPT-4 model in run.yml)
+export OPENAI_API_KEY="your-openai-api-key"
 
 # Optional: JWT Mode (defaults to asymmetric)
 export JWT_MODE="asymmetric"  # or "symmetric"
@@ -180,6 +188,9 @@ GOOGLE_CLIENT_SECRET="your-client-secret"
 
 # Admin Setup
 ADMIN_EMAIL="your-admin@example.com"
+
+# OpenAI Integration
+OPENAI_API_KEY="your-openai-api-key"      # Required for GPT-4 model in Llama Stack
 
 # Database
 DB_PATH="auth-server/auth.db"
