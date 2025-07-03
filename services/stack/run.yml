@@ -2,7 +2,7 @@ version: '2'
 image_name: llamastack-auth
 container_image: null
 
-external_providers_dir: ./frontend/providers
+external_providers_dir: ./services/providers
 
 distribution_spec:
   local:
@@ -55,3 +55,13 @@ models:
     provider_id: openai
     model_type: llm
     provider_model_id: gpt-4-turbo
+
+server:
+  port: 8321
+  auth:
+    provider_type: "oauth2_token"
+    config:
+      jwks:
+        uri: "http://localhost:8002/.well-known/jwks.json"
+      issuer: "http://localhost:8002"
+      audience: "http://localhost:8321"

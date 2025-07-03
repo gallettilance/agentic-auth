@@ -89,6 +89,79 @@ sequenceDiagram
 
 ---
 
+## ⚠️ **MCP Gateway Security Anti-Pattern**
+
+### **The Gateway Security Problem**
+
+MCP Gateway architectures create a **dangerous security model** that violates fundamental security principles:
+
+```
+❌ INSECURE GATEWAY PATTERN
+Internet → MCP Gateway → Unprotected MCP Server
+           (Auth here)    (No auth here - DANGEROUS!)
+```
+✅ SECURE GATEWAY PATTERN
+Internet → MCP Gateway → Protected MCP Server
+           (Routing,      (Still validates tokens
+            Monitoring)    independently - SECURE!)
+```
+
+**Implementation:**
+```python
+# Gateway adds value without removing security
+app.post('/mcp', async (req, res) => {
+    # ALWAYS validate token, even behind gateway
+    const authResult = await authenticateToken(req, res);
+    if (!authResult.success) {
+        return authResult.response;  # 401/403
+    }
+    
+    # Log that request came through gateway (optional)
+    const viaGateway = req.headers['x-forwarded-by'] === 'mcp-gateway';
+    
+    # Execute tool with validated auth
+    await executeTool(req.body.params, authResult.authObject);
+});
+```
+
+### **When Gateways Add Value (Securely)**
+
+Gateways can provide **non-security benefits** when implemented correctly:
+
+- **Traffic Management**: Load balancing, rate limiting
+- **Observability**: Centralized logging, metrics, tracing  
+- **Protocol Translation**: Different transport protocols
+- **Service Discovery**: Unified endpoint for multiple backends
+
+**Key Principle**: Gateways should be **additive security layers**, never **replacement security layers**.
+
+### **Architecture Recommendation**
+
+**✅ RECOMMENDED: Self-Authenticating MCP Servers**
+```python
+# Each MCP server validates its own tokens
+@app.post('/mcp')
+async def handle_mcp_request(req, res):
+    # Self-contained security validation
+    auth_result = await authenticate_token(req.headers.get('authorization'))
+    if not auth_result.valid:
+        return unauthorized_response()
+    
+    # Execute tools with validated context
+    return await execute_tool(req.body, auth_result.user_context)
+```
+
+**Benefits:**
+- ✅ **Safe Direct Exposure**: Can expose server directly to internet safely
+- ✅ **Zero Trust**: Never trusts upstream filtering
+- ✅ **OAuth 2.1 Compliant**: Follows resource server specification
+- ✅ **Defense in Depth**: Multiple security layers
+- ✅ **Simple Architecture**: No complex proxy configurations
+
+**Conclusion**: MCP servers should be **stateless, self-authenticating resource servers** that validate every request independently, regardless of whether they sit behind gateways or are directly exposed.
+
+---
+
 ## 📋 **Implementation Requirements**
 
 ### **🔧 MCP Server Developers (Resource Server)**
@@ -158,6 +231,7 @@ async def protected_resource_metadata():
 - [ ] **Enhanced Metadata** - Include security contact and verification info
 - [ ] **Domain Verification** - Support domain ownership verification during registration
 - [ ] **Tool-Name-as-Scope Pattern** - Use tool names as OAuth scopes for simplicity
+- [ ] **Independent Token Validation** - Always validate tokens regardless of gateway presence
 
 **What NOT to Handle:**
 - ❌ Token lifecycle (issuing, refreshing, revoking)

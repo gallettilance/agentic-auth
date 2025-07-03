@@ -208,12 +208,12 @@ class AuthDatabase:
                 -- User scope limits table for maximum allowed scopes
                 CREATE TABLE IF NOT EXISTS user_scope_limits (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_email TEXT,
-                    role_name TEXT,
-                    max_scopes TEXT, -- JSON array of maximum allowed scopes
-                    auto_approve_scopes TEXT, -- JSON array of auto-approved scopes  
+                    user_email TEXT NOT NULL,
+                    role_name TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    max_requests_per_hour INTEGER DEFAULT 100,
+                    max_requests_per_day INTEGER DEFAULT 1000,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_email) REFERENCES users (email),
                     FOREIGN KEY (role_name) REFERENCES roles (name)
                 );
@@ -229,6 +229,19 @@ class AuthDatabase:
                 CREATE INDEX IF NOT EXISTS idx_scope_policies_active ON scope_policies (is_active);
                 CREATE INDEX IF NOT EXISTS idx_user_scope_limits_email ON user_scope_limits (user_email);
                 CREATE INDEX IF NOT EXISTS idx_user_scope_limits_role ON user_scope_limits (role_name);
+                
+                -- Pending token updates table
+                CREATE TABLE IF NOT EXISTS pending_token_updates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_email TEXT NOT NULL,
+                    new_scopes TEXT NOT NULL,
+                    approval_type TEXT DEFAULT 'manual',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_email) REFERENCES users (email),
+                    UNIQUE (user_email)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_pending_token_updates_user ON pending_token_updates (user_email);
             """)
             
             # Initialize default data
@@ -255,10 +268,18 @@ class AuthDatabase:
                 (name, description, is_default)
             )
             
-        # Create essential permissions only
+        # Create essential permissions using tool names as scopes (scope == tool name convention)
         default_permissions = [
-            ("read:files", "Read file system information", "low", False),
-            ("execute:commands", "Execute system commands", "critical", True),
+            # MCP Tool Scopes (tool names as scopes)
+            ("list_files", "List files in a directory", "low", False),
+            ("execute_command", "Execute system commands", "critical", True),
+            ("get_server_info", "Get server information and authentication status", "low", False),
+            ("get_oauth_metadata", "Get OAuth 2.0 Protected Resource Metadata", "low", False),
+            ("health_check", "Perform a health check of the server", "low", False),
+            ("list_tool_scopes", "List all available tools and their required scopes", "low", False),
+            ("verify_domain", "Verify domain ownership for MCP server registration", "medium", False),
+            
+            # Admin Scopes (still using colon format for admin functions)
             ("admin:users", "Manage user accounts and permissions", "critical", True),
             ("admin:roles", "Manage roles and permissions", "critical", True),
             ("admin:clients", "Manage OAuth clients", "critical", True),
@@ -271,11 +292,18 @@ class AuthDatabase:
                 (scope, description, risk_level, requires_admin)
             )
             
-        # Set up role-permission mappings (simplified)
+        # Set up role-permission mappings (using tool names as scopes)
         role_permissions = {
             "admin": [
-                ("read:files", True),
-                ("execute:commands", True),
+                # MCP tool scopes (auto-approve for admins)
+                ("list_files", True),
+                ("execute_command", True),
+                ("get_server_info", True),
+                ("get_oauth_metadata", True),
+                ("health_check", True),
+                ("list_tool_scopes", True),
+                ("verify_domain", True),
+                # Admin scopes
                 ("admin:users", True),
                 ("admin:roles", True),
                 ("admin:clients", True),
@@ -286,7 +314,7 @@ class AuthDatabase:
                 # Users start with NO permissions in their initial token (empty scope)
                 # They must use token exchange to request specific permission scopes
                 # This provides better security and audit trail
-                # Available scopes: read:files (auto-approve), execute:commands (requires admin approval)
+                # Available scopes: tool names (various approval policies)
             ]
         }
         
@@ -323,17 +351,36 @@ class AuthDatabase:
                 (f"client_secret_{client_id}", client_secret, f"Client secret for {client_id}")
             )
         
-        # Create default scope policies (RFC 8693 compliant)
+        # Create default scope policies (RFC 8693 compliant) - using tool names as scopes
         default_scope_policies = [
-            # Basic read access - auto-approve for all users
-            ("read:files", "auto_approve", ["user", "admin"], 
-             {"description": "Basic file system read access", "max_risk": "low"}, 
-             "Auto-approve basic read access for all authenticated users"),
+            # MCP Tool Scopes (tool name == scope name)
+            ("list_files", "auto_approve", ["user", "admin"], 
+             {"description": "List files in a directory", "max_risk": "low"}, 
+             "Auto-approve for all authenticated users"),
             
-            # Command execution - requires admin approval for regular users, auto for admins
-            ("execute:commands", "role_required", ["admin"], 
-             {"description": "System command execution", "max_risk": "critical", "fallback": "admin_required"}, 
+            ("execute_command", "role_required", ["admin"], 
+             {"description": "Execute system commands", "max_risk": "critical", "fallback": "admin_required"}, 
              "Auto-approve for admins, require admin approval for others"),
+            
+            ("get_server_info", "auto_approve", ["user", "admin"], 
+             {"description": "Get server information", "max_risk": "low"}, 
+             "Auto-approve for all authenticated users"),
+            
+            ("get_oauth_metadata", "auto_approve", ["user", "admin"], 
+             {"description": "Get OAuth metadata", "max_risk": "low"}, 
+             "Auto-approve for all authenticated users"),
+            
+            ("health_check", "auto_approve", ["user", "admin"], 
+             {"description": "Perform health check", "max_risk": "low"}, 
+             "Auto-approve for all authenticated users"),
+            
+            ("list_tool_scopes", "auto_approve", ["user", "admin"], 
+             {"description": "List tool scopes", "max_risk": "low"}, 
+             "Auto-approve for all authenticated users"),
+            
+            ("verify_domain", "auto_approve", ["user", "admin"], 
+             {"description": "Verify domain ownership", "max_risk": "medium"}, 
+             "Auto-approve for all authenticated users"),
             
             # Admin scopes - always require admin role
             ("admin:users", "role_required", ["admin"], 
@@ -483,6 +530,43 @@ class AuthDatabase:
                 created_at=datetime.fromisoformat(client_row['created_at']),
                 updated_at=datetime.fromisoformat(client_row['updated_at'])
             )
+            
+    def create_client(
+        self, 
+        client_id: str, 
+        client_secret: str, 
+        client_type: str = "confidential",
+        description: str = "",
+        redirect_uris: Optional[List[str]] = None,
+        allowed_audiences: Optional[List[str]] = None,
+        token_exchange_enabled: bool = True
+    ) -> bool:
+        """Create a new OAuth client (RFC 7591 Dynamic Client Registration)"""
+        try:
+            client_secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
+            
+            with self.get_connection() as conn:
+                conn.execute(
+                    """INSERT INTO oauth_clients 
+                       (client_id, client_secret_hash, client_type, description, 
+                        token_exchange_enabled, allowed_audiences, is_active) 
+                       VALUES (?, ?, ?, ?, ?, ?, TRUE)""",
+                    (
+                        client_id,
+                        client_secret_hash,
+                        client_type,
+                        description,
+                        token_exchange_enabled,
+                        json.dumps(allowed_audiences or [])
+                    )
+                )
+                
+                logger.info(f"OAuth client created: {client_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to create OAuth client {client_id}: {e}")
+            return False
             
     def get_configuration(self, key: str) -> Optional[str]:
         """Get configuration value"""
@@ -700,6 +784,218 @@ class AuthDatabase:
             'denied': denied,
             'user_roles': user_roles
         }
+    
+    def create_approval_request(self, approval_request) -> bool:
+        """Create a new approval request"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO approval_requests 
+                    (request_id, user_email, user_id, tool_name, required_scope, 
+                     risk_level, justification, status, requested_at, expires_at, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    approval_request.request_id,
+                    approval_request.user_email,
+                    approval_request.user_id,
+                    approval_request.tool_name,
+                    approval_request.required_scope,
+                    approval_request.risk_level.value,
+                    approval_request.justification,
+                    approval_request.status.value,
+                    approval_request.requested_at.isoformat(),
+                    approval_request.expires_at.isoformat(),
+                    json.dumps(approval_request.metadata) if approval_request.metadata else None
+                ))
+                return True
+        except Exception as e:
+            logger.error(f"Failed to create approval request: {e}")
+            return False
+    
+    def get_pending_approval_requests(self) -> List:
+        """Get all pending approval requests"""
+        from models.schemas import ApprovalRequest, ApprovalStatus, RiskLevel
+        
+        try:
+            with self.get_connection() as conn:
+                requests = conn.execute("""
+                    SELECT * FROM approval_requests 
+                    WHERE status = 'pending' AND expires_at > datetime('now')
+                    ORDER BY requested_at DESC
+                """).fetchall()
+                
+                result = []
+                for req in requests:
+                    result.append(ApprovalRequest(
+                        request_id=req['request_id'],
+                        user_email=req['user_email'],
+                        user_id=req['user_id'],
+                        tool_name=req['tool_name'],
+                        required_scope=req['required_scope'],
+                        risk_level=RiskLevel(req['risk_level']),
+                        justification=req['justification'],
+                        requested_at=datetime.fromisoformat(req['requested_at']),
+                        expires_at=datetime.fromisoformat(req['expires_at']),
+                        status=ApprovalStatus(req['status']),
+                        approved_by=req['approved_by'],
+                        approved_at=datetime.fromisoformat(req['approved_at']) if req['approved_at'] else None,
+                        denied_by=req['denied_by'],
+                        denied_at=datetime.fromisoformat(req['denied_at']) if req['denied_at'] else None,
+                        denial_reason=req['denial_reason'],
+                        metadata=json.loads(req['metadata']) if req['metadata'] else None
+                    ))
+                return result
+        except Exception as e:
+            logger.error(f"Failed to get pending approval requests: {e}")
+            return []
+    
+    def get_approval_request(self, request_id: str):
+        """Get a specific approval request"""
+        from models.schemas import ApprovalRequest, ApprovalStatus, RiskLevel
+        
+        try:
+            with self.get_connection() as conn:
+                req = conn.execute("""
+                    SELECT * FROM approval_requests WHERE request_id = ?
+                """, (request_id,)).fetchone()
+                
+                if req:
+                    return ApprovalRequest(
+                        request_id=req['request_id'],
+                        user_email=req['user_email'],
+                        user_id=req['user_id'],
+                        tool_name=req['tool_name'],
+                        required_scope=req['required_scope'],
+                        risk_level=RiskLevel(req['risk_level']),
+                        justification=req['justification'],
+                        requested_at=datetime.fromisoformat(req['requested_at']),
+                        expires_at=datetime.fromisoformat(req['expires_at']),
+                        status=ApprovalStatus(req['status']),
+                        approved_by=req['approved_by'],
+                        approved_at=datetime.fromisoformat(req['approved_at']) if req['approved_at'] else None,
+                        denied_by=req['denied_by'],
+                        denied_at=datetime.fromisoformat(req['denied_at']) if req['denied_at'] else None,
+                        denial_reason=req['denial_reason'],
+                        metadata=json.loads(req['metadata']) if req['metadata'] else None
+                    )
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get approval request {request_id}: {e}")
+            return None
+    
+    def update_approval_request(self, approval_request) -> bool:
+        """Update an approval request"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    UPDATE approval_requests SET
+                        status = ?,
+                        approved_by = ?,
+                        approved_at = ?,
+                        denied_by = ?,
+                        denied_at = ?,
+                        denial_reason = ?,
+                        metadata = ?
+                    WHERE request_id = ?
+                """, (
+                    approval_request.status.value,
+                    approval_request.approved_by,
+                    approval_request.approved_at.isoformat() if approval_request.approved_at else None,
+                    approval_request.denied_by,
+                    approval_request.denied_at.isoformat() if approval_request.denied_at else None,
+                    approval_request.denial_reason,
+                    json.dumps(approval_request.metadata) if approval_request.metadata else None,
+                    approval_request.request_id
+                ))
+                return True
+        except Exception as e:
+            logger.error(f"Failed to update approval request: {e}")
+            return False
+    
+    def create_user_if_not_exists(self, email: str) -> bool:
+        """Create user if it doesn't exist"""
+        existing_user = self.get_user(email)
+        if existing_user:
+            return True
+        return self.create_user(email, ["user"], is_admin=False)
+    
+    def add_pending_token_update(self, user_email: str, new_scopes: List[str], approval_type: str = 'manual') -> bool:
+        """Add or update pending token update for a user"""
+        try:
+            with self.get_connection() as conn:
+                # Convert scopes list to JSON string
+                scopes_json = json.dumps(new_scopes)
+                
+                # Insert or replace the pending update
+                conn.execute("""
+                    INSERT OR REPLACE INTO pending_token_updates 
+                    (user_email, new_scopes, approval_type, created_at)
+                    VALUES (?, ?, ?, datetime('now'))
+                """, (user_email, scopes_json, approval_type))
+                
+                logger.info(f"🎫 Added pending token update for {user_email} with scopes: {new_scopes}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to add pending token update for {user_email}: {e}")
+            return False
+    
+    def get_pending_token_update(self, user_email: str) -> Optional[Dict[str, Any]]:
+        """Get pending token update for a user"""
+        try:
+            with self.get_connection() as conn:
+                update_row = conn.execute("""
+                    SELECT new_scopes, approval_type, created_at 
+                    FROM pending_token_updates 
+                    WHERE user_email = ?
+                """, (user_email,)).fetchone()
+                
+                if update_row:
+                    return {
+                        'user_email': user_email,
+                        'new_scopes': json.loads(update_row['new_scopes']),
+                        'approval_type': update_row['approval_type'],
+                        'created_at': update_row['created_at']
+                    }
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get pending token update for {user_email}: {e}")
+            return None
+    
+    def clear_pending_token_update(self, user_email: str) -> bool:
+        """Clear pending token update for a user"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    DELETE FROM pending_token_updates WHERE user_email = ?
+                """, (user_email,))
+                
+                logger.info(f"🎫 Cleared pending token update for {user_email}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to clear pending token update for {user_email}: {e}")
+            return False
+    
+    def get_user_approved_scopes(self, user_email: str) -> List[str]:
+        """Get all approved scopes for a user (from approved requests only)"""
+        try:
+            # Get approved scopes from approval requests only
+            with self.get_connection() as conn:
+                approved_requests = conn.execute("""
+                    SELECT DISTINCT required_scope 
+                    FROM approval_requests 
+                    WHERE user_email = ? AND status = 'approved'
+                    ORDER BY required_scope
+                """, (user_email,)).fetchall()
+                
+            approved_scopes = [req['required_scope'] for req in approved_requests]
+            return sorted(approved_scopes)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get approved scopes for {user_email}: {e}")
+            return []
 
 # Global database instance
 auth_db = AuthDatabase()

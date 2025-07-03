@@ -1,77 +1,235 @@
 sequenceDiagram
-    participant U as 👤 User
-    participant C as 📱 Chat App
-    participant A as 🔐 Auth Server
-    participant L as 🤖 Llama Stack
-    participant M as 🛠️ MCP Server
-    participant T as 🔧 Tools
-    
-    Note over U,T: 1. Initial Authentication
-    U->>C: Enter chat message
-    C->>A: Check session/token
-    A->>C: Valid JWT token with scopes
-    
-    Note over U,T: 2. Agent Processing
-    C->>L: POST /agents/{id}/turns with Bearer token
-    L->>L: GPT-4 processes message, determines tool needed
-    
-    Note over U,T: 3. Tool Execution Attempt
-    L->>M: HTTP request to MCP tool with Authorization header
-    M->>M: Validate JWT signature, check aud & iss claims
-    M->>M: Extract scopes from token, check against tool requirements
-    
-    alt Insufficient Scope
-        M->>L: 403 Forbidden with error details
-        L->>L: Raise InsufficientScopeError
-        L->>C: Stream response with authorization error
+    participant U as User/Browser
+    participant CUI as Chat UI<br/>(Port 5001)
+    participant AS as Auth Server<br/>(Port 8002)
+    participant LS as Llama Stack<br/>(Port 8321)
+    participant AA as Auth Agent<br/>(in Llama Stack)
+    participant MCP as MCP Server<br/>(Port 8001)
+    participant AD as Admin Dashboard<br/>(Port 5002)
+    participant GA as Google OAuth
+
+    Note over U,GA: 🚀 Initial Application Access & Discovery
+
+    U->>CUI: Access http://localhost:5001
+    CUI->>CUI: Check session cookies
+    alt No valid session
+        CUI->>AS: GET /api/user-status (check auth)
+        AS-->>CUI: 401 Unauthorized
+        CUI-->>U: Show login.html
         
-        Note over U,T: 4. Automatic Scope Upgrade
-        C->>A: POST /api/upgrade-scope with required scopes
-        A->>A: Check approval policy for user & scope
-        
-        alt Auto-approve policy
-            A->>A: Generate new JWT with additional scope
-            A->>C: Return new access token
-            C->>C: Update stored token
-            
-            Note over U,T: 5. Retry with New Token
-            C->>L: Retry message with new Bearer token
-            L->>M: HTTP request with updated Authorization
-            M->>M: Validate new token with required scopes
-            M->>T: Execute tool (list files, run command, etc.)
-            T->>M: Return tool result
-            M->>L: Success response with tool output
-            L->>L: Incorporate result into GPT-4 response
-            L->>C: Stream final response with tool results
-            
-        else Requires admin approval
-            A->>A: Create approval request in database
-            A->>C: Return approval_required status
-            C->>U: Show waiting for approval message
-            
-            Note over U,T: 6. Admin Approval Flow
-            A->>A: Notify admin via email/dashboard
-            Note right of A: Admin reviews and approves request
-            A->>A: Generate JWT with approved scope
-            
-            Note over U,T: 7. Auto-retry after approval
-            C->>A: Poll for token update
-            A->>C: Return new token when approved
-            C->>C: Update stored token
-            C->>L: Auto-retry original message
-            L->>M: HTTP request with approved token
-            M->>T: Execute tool
-            T->>M: Tool result
-            M->>L: Success response
-            L->>C: Final response
-        end
-        
-    else Token has required scope
-        M->>T: Execute tool directly
-        T->>M: Tool result
-        M->>L: Success response with tool output
-        L->>L: Incorporate into GPT-4 response
-        L->>C: Stream response with results
+        Note over U,GA: 🔐 OAuth Authentication Flow
+        U->>CUI: Click "Login with Google"
+        CUI->>AS: GET /auth/authorize?client_id=chat-ui&redirect_uri=...
+        AS->>GA: Redirect to Google OAuth
+        GA-->>U: Google login page
+        U->>GA: Enter credentials
+        GA->>AS: Redirect to /auth/callback with auth code
+        AS->>GA: Exchange auth code for user info
+        GA-->>AS: User profile data
+        AS->>AS: Create/update user in database
+        AS->>AS: Generate session token
+        AS->>AS: Generate initial Llama Stack token (empty scopes)
+        AS->>CUI: Redirect to /callback with auth code
+        CUI->>AS: POST /auth/token (exchange code for tokens)
+        AS-->>CUI: Session token + Llama Stack token
+        CUI->>CUI: Set auth_session + llama_stack_token cookies
+        CUI->>CUI: Store tokens in session
+        CUI-->>U: Redirect to chat interface
+    else Valid session exists
+        CUI->>AS: GET /api/user-status (verify session)
+        AS-->>CUI: User info + authentication status
+        CUI-->>U: Show chat.html with user info
     end
+
+    Note over U,MCP: 🎯 Chat Interface Initialization
+
+    U->>CUI: Page loads (DOMContentLoaded)
+    CUI->>CUI: loadChatHistory()
+    CUI->>CUI: GET /api/chat-history
+    CUI->>LS: Get session messages
+    LS-->>CUI: Historical messages
+    CUI->>CUI: refreshTokenDashboard()
+    CUI->>CUI: GET /api/token-info
+    CUI-->>U: Display chat with history + token status
+
+    Note over U,MCP: 💬 User Interaction & Tool Discovery
+
+    U->>CUI: Type message: "List files in /tmp"
+    CUI->>CUI: POST /api/chat (send message)
+    CUI->>LS: Create agent turn with message
+    LS->>AA: Process user message
+    AA->>AA: Analyze request - requires list_files tool
+    AA->>AA: Prepare MCP headers with current token
+    AA->>MCP: Call list_files tool with JWT token
     
-    C->>U: Display final response in chat interface 
+    alt Token has sufficient scope
+        MCP->>MCP: Validate JWT token locally
+        MCP->>MCP: Check scopes: list_files ✓
+        MCP->>MCP: Execute file listing
+        MCP-->>AA: Success: file list results
+        AA-->>LS: Tool execution successful
+        LS-->>CUI: Stream response with results
+        CUI-->>U: Display file listing
+    else Token lacks required scope
+        MCP->>MCP: Validate JWT token locally
+        MCP->>MCP: Check scopes: list_files ✗
+        MCP-->>AA: 403 Insufficient scope error
+        AA->>AA: Detect authorization error
+        AA->>AA: Extract error details (tool_name, required_scope)
+        AA-->>LS: Return structured authorization error
+        LS-->>CUI: Stream error response
+        CUI->>CUI: Parse authorization error
+        CUI-->>U: Show "🔐 Authorization required" with approve button
+    end
+
+    Note over U,AS: 🔄 Scope Upgrade Request Flow
+
+    U->>CUI: Click "Request Approval" button
+    CUI->>CUI: POST /api/request-scope-upgrade
+    CUI->>AS: POST /api/upgrade-scope with required scopes
+    AS->>AS: evaluate_approval_policy(user_email, scopes)
+    AS->>AS: Check scope policies in database
+    
+    alt Auto-approved scopes (e.g., list_files)
+        AS->>AS: Mark scopes as auto-approved
+        AS->>AS: Generate new MCP token with additional scopes
+        AS->>AS: Update user's token cache
+        AS-->>CUI: Success: new token with scopes
+        CUI->>CUI: Update token in session/cookies
+        CUI->>CUI: Auto-retry original request
+        CUI->>LS: Retry agent turn
+        LS->>AA: Re-process with new token
+        AA->>MCP: Retry tool call with upgraded token
+        MCP->>MCP: Validate new token - scopes ✓
+        MCP->>MCP: Execute tool successfully
+        MCP-->>AA: Success: tool results
+        AA-->>LS: Tool execution successful
+        LS-->>CUI: Stream successful response
+        CUI-->>U: Show "✅ Auto-approved! Retrying..." then results
+    else Requires manual approval (e.g., execute_command)
+        AS->>AS: Create approval request in database
+        AS->>AS: Generate approval request ID
+        AS-->>CUI: Pending: approval request created
+        CUI-->>U: Show "📋 Approval requested - waiting for admin"
+    end
+
+    Note over U,AD: 👑 Admin Dashboard & Approval Management
+
+    U->>AD: Access http://localhost:5002 (admin user)
+    AD->>AS: GET /api/user-status (verify admin)
+    AS-->>AD: User info + admin status
+    AD->>AS: GET /api/admin/pending-approvals
+    AS-->>AD: List of pending approval requests
+    AD-->>U: Show dashboard with pending approvals
+
+    U->>AD: Click "✅ Approve" on request
+    AD->>AS: POST /api/admin/approve/{request_id}
+    AS->>AS: Update approval request status
+    AS->>AS: Generate new MCP token with approved scopes
+    AS->>AS: Update user's token cache
+    AS-->>AD: Success: approval granted
+    AD-->>U: Show "Request approved successfully!"
+
+    Note over U,MCP: 🔄 Token Update Detection & Auto-Retry
+
+    CUI->>CUI: checkForTokenUpdates() (every 5 seconds)
+    CUI->>CUI: GET /api/check-token-update
+    CUI->>AS: Check for token updates
+    AS->>AS: Check if user's token has been updated
+    AS-->>CUI: Token updated: true + new scopes
+    CUI->>CUI: Show "✅ New permissions approved! Auto-retrying..."
+    CUI->>CUI: autoRetryPendingRequests()
+    CUI->>LS: Retry failed requests with new token
+    LS->>AA: Re-process with upgraded token
+    AA->>MCP: Retry tool calls
+    MCP->>MCP: Validate new token - scopes ✓
+    MCP-->>AA: Success: tool results
+    AA-->>LS: Tool execution successful
+    LS-->>CUI: Stream successful response
+    CUI-->>U: Show successful tool execution
+
+    Note over U,MCP: 🔧 Advanced Tool Operations
+
+    U->>CUI: Type: "Execute command: ls -la"
+    CUI->>LS: Create agent turn
+    LS->>AA: Process command request
+    AA->>MCP: Call execute_command tool
+    MCP->>MCP: Validate token - requires execute_command scope
+    
+    alt User has admin role
+        MCP->>MCP: Scope check: execute_command ✓
+        MCP->>MCP: Execute system command
+        MCP-->>AA: Command output
+        AA-->>LS: Tool execution successful
+        LS-->>CUI: Stream command results
+        CUI-->>U: Display command output
+    else User lacks admin privileges
+        MCP-->>AA: 403 Insufficient scope
+        AA-->>LS: Authorization error
+        LS-->>CUI: Stream error
+        CUI-->>U: Show approval request UI
+        Note right of CUI: This will require manual admin approval<br/>due to high-risk nature of execute_command
+    end
+
+    Note over U,AD: 🔍 Token & User Management
+
+    U->>AD: View "Token Management" section
+    AD->>AS: GET /api/admin/users
+    AS-->>AD: List of users + their tokens
+    AD-->>U: Show user token status
+
+    U->>AD: Click "🔄 Refresh Tools"
+    AD->>AS: GET /api/tools
+    AS->>MCP: Fetch available tools via MCP protocol
+    MCP-->>AS: Tool list + descriptions
+    AS-->>AD: Tools + user access levels
+    AD-->>U: Updated tools list
+
+    Note over U,GA: 🔄 Session Management & Cleanup
+
+    CUI->>CUI: Session timeout check (periodic)
+    alt Session expired
+        CUI->>AS: GET /api/user-status
+        AS-->>CUI: 401 Session expired
+        CUI->>CUI: Clear local session
+        CUI-->>U: Redirect to login
+    else Session valid
+        CUI->>AS: Refresh session
+        AS-->>CUI: Session refreshed
+    end
+
+    Note over U,MCP: 🧹 Cleanup & Maintenance
+
+    CUI->>CUI: cleanupOldPendingRequests() (every minute)
+    CUI->>CUI: Remove requests older than 10 minutes
+    
+    AS->>AS: Database cleanup (periodic)
+    AS->>AS: Remove expired approval requests
+    AS->>AS: Clean up old sessions
+
+    Note over U,GA: 🔐 Security Features
+
+    rect rgb(255, 240, 240)
+        Note over MCP: MCP Server Security
+        Note over MCP: • Local JWT validation (no auth server calls)
+        Note over MCP: • Scope-based access control
+        Note over MCP: • Tool-level permission checks
+        Note over MCP: • Audit logging of all tool calls
+    end
+
+    rect rgb(240, 255, 240)
+        Note over AS: Auth Server Security
+        Note over AS: • Google OAuth integration
+        Note over AS: • JWT token generation & validation
+        Note over AS: • Role-based access control
+        Note over AS: • Approval workflow management
+        Note over AS: • Session management
+    end
+
+    rect rgb(240, 240, 255)
+        Note over CUI: Chat UI Security
+        Note over CUI: • Secure cookie handling
+        Note over CUI: • Token refresh management
+        Note over CUI: • Authorization error handling
+        Note over CUI: • Auto-retry with upgraded tokens
+    end 

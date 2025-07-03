@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 import shlex
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any
 import json
 
@@ -26,10 +26,9 @@ SERVER_URI = f"http://{SERVER_HOST}:{SERVER_PORT}"
 
 # Auth Server Configuration
 AUTH_SERVER_URI = "http://localhost:8002"  # The authentication server
-JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret-key-change-in-production")
-JWT_MODE = os.getenv("JWT_MODE", "symmetric")  # "symmetric" or "asymmetric"
 
-# For asymmetric JWT, we'll fetch the public key from JWKS endpoint on-demand
+# MCP Server only supports asymmetric JWT verification via JWKS
+# This ensures proper security and prevents fallback to weaker symmetric verification
 
 # Create FastMCP instance
 mcp = FastMCP(
@@ -37,15 +36,12 @@ mcp = FastMCP(
     version=SERVER_VERSION
 )
 
-logger.info(f"🔐 MCP Server JWT Mode: {JWT_MODE}")
-if JWT_MODE == "asymmetric":
-    logger.info(f"🔑 Using JWKS endpoint: {AUTH_SERVER_URI}/.well-known/jwks.json")
-else:
-    logger.info(f"🔑 Using symmetric JWT with shared secret")
+logger.info(f"🔐 MCP Server JWT Mode: ASYMMETRIC (JWKS only)")
+logger.info(f"🔑 Using JWKS endpoint: {AUTH_SERVER_URI}/.well-known/jwks.json")
 
 # Helper function to verify token from context
 def verify_token_from_context(ctx: Context) -> dict:
-    """Extract and verify JWT token from MCP context"""
+    """Extract and verify JWT token from MCP context using JWKS only"""
     try:
         # Get Authorization header from request
         auth_header = ctx.request_context.request.headers.get("authorization")  # type: ignore
@@ -58,56 +54,71 @@ def verify_token_from_context(ctx: Context) -> dict:
         token = auth_header.split(" ")[1]
         logger.info(f"🎫 JWT token: {token[:50]}...")
         
-        # Choose verification method based on JWT mode
-        if JWT_MODE == "asymmetric":
-            # Use JWKS for asymmetric verification
-            try:
-                from jwt import PyJWKClient
-                jwks_client = PyJWKClient(f"{AUTH_SERVER_URI}/.well-known/jwks.json")
-                signing_key = jwks_client.get_signing_key_from_jwt(token)
-                
-                payload = jwt.decode(
-                    token,
-                    signing_key.key,
-                    algorithms=["RS256"],
-                    options={"verify_aud": False},
-                    leeway=21600  # 6 hours leeway for clock skew
-                )
-                logger.info(f"✅ Verified RS256 token using JWKS")
-            except Exception as jwks_error:
-                logger.error(f"❌ JWKS verification failed: {jwks_error}")
-                # Fallback to symmetric verification
-                logger.info("🔄 Falling back to symmetric verification")
-                payload = jwt.decode(
-                    token, 
-                    JWT_SECRET, 
-                    algorithms=["HS256"],
-                    options={"verify_aud": False},
-                    leeway=21600  # 6 hours leeway for clock skew
-                )
-        else:
-            # Use shared secret for symmetric verification
-            payload = jwt.decode(
-                token, 
-                JWT_SECRET, 
-                algorithms=["HS256"],
-                options={"verify_aud": False},
-                leeway=21600  # 6 hours leeway for clock skew
-            )
+        # Decode token header to see what we're working with
+        try:
+            import base64
+            header_b64 = token.split('.')[0]
+            # Add padding if needed
+            header_b64 += '=' * (4 - len(header_b64) % 4)
+            header_json = base64.urlsafe_b64decode(header_b64).decode('utf-8')
+            header = json.loads(header_json)
+            logger.info(f"🔍 JWT Header: {header}")
+            logger.info(f"📝 Algorithm: {header.get('alg', 'unknown')}, Key ID: {header.get('kid', 'None')}")
+        except Exception as header_error:
+            logger.warning(f"⚠️ Could not decode JWT header: {header_error}")
+        
+        # Use JWKS for asymmetric verification (no fallback)
+        logger.info(f"🔗 Fetching JWKS from: {AUTH_SERVER_URI}/.well-known/jwks.json")
+        from jwt import PyJWKClient
+        jwks_client = PyJWKClient(f"{AUTH_SERVER_URI}/.well-known/jwks.json")
+        
+        logger.info("🔍 Getting signing key from JWT...")
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        logger.info(f"🔑 Found signing key: {signing_key.key_id if hasattr(signing_key, 'key_id') else 'unknown'}")
+        
+        logger.info("🔓 Decoding JWT token...")
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+            leeway=21600  # 6 hours leeway for clock skew
+        )
+        logger.info(f"✅ Verified RS256 token using JWKS")
         
         logger.info(f"📋 JWT payload: {payload}")
         
         # Validate audience - token must be for this MCP server
-        if payload.get("aud") != SERVER_URI:
-            logger.error(f"❌ Invalid audience: expected {SERVER_URI}, got {payload.get('aud')}")
-            raise Exception(f"Invalid audience: expected {SERVER_URI}, got {payload.get('aud')}")
+        expected_aud = SERVER_URI
+        actual_aud = payload.get("aud")
+        logger.info(f"🎯 Audience check: expected='{expected_aud}', actual='{actual_aud}'")
+        if actual_aud != expected_aud:
+            logger.error(f"❌ Invalid audience: expected {expected_aud}, got {actual_aud}")
+            raise Exception(f"Invalid audience: expected {expected_aud}, got {actual_aud}")
         
         # Validate issuer
-        if payload.get("iss") != AUTH_SERVER_URI:
-            logger.error(f"❌ Invalid issuer: expected {AUTH_SERVER_URI}, got {payload.get('iss')}")
-            raise Exception(f"Invalid issuer: expected {AUTH_SERVER_URI}, got {payload.get('iss')}")
+        expected_iss = AUTH_SERVER_URI
+        actual_iss = payload.get("iss")
+        logger.info(f"🏢 Issuer check: expected='{expected_iss}', actual='{actual_iss}'")
+        if actual_iss != expected_iss:
+            logger.error(f"❌ Invalid issuer: expected {expected_iss}, got {actual_iss}")
+            raise Exception(f"Invalid issuer: expected {expected_iss}, got {actual_iss}")
         
-        logger.info(f"✅ Token validated for user: {payload.get('email')}")
+        # Log token expiration info
+        exp = payload.get("exp")
+        iat = payload.get("iat")
+        if exp and iat:
+            from datetime import datetime
+            exp_time = datetime.fromtimestamp(exp)
+            iat_time = datetime.fromtimestamp(iat)
+            now = datetime.now()
+            logger.info(f"⏰ Token times: issued={iat_time}, expires={exp_time}, now={now}")
+            logger.info(f"⏳ Token valid for: {exp_time - now} more")
+        
+        user_email = payload.get('email', 'unknown')
+        user_scopes = payload.get('scope', '').split() if payload.get('scope') else []
+        logger.info(f"✅ Token validated for user: {user_email}")
+        logger.info(f"🔐 User scopes: {user_scopes}")
         return payload
         
     except jwt.ExpiredSignatureError:
@@ -116,70 +127,93 @@ def verify_token_from_context(ctx: Context) -> dict:
     except jwt.InvalidTokenError as e:
         logger.error(f"❌ Invalid token: {e}")
         raise Exception("Invalid token")
+    except Exception as e:
+        logger.error(f"❌ JWKS verification failed: {e}")
+        logger.error(f"🔍 Error type: {type(e).__name__}")
+        # Log additional debugging info
+        try:
+            logger.error(f"🌐 JWKS URL: {AUTH_SERVER_URI}/.well-known/jwks.json")
+            import httpx
+            response = httpx.get(f"{AUTH_SERVER_URI}/.well-known/jwks.json")
+            logger.error(f"📡 JWKS response status: {response.status_code}")
+            if response.status_code == 200:
+                jwks_data = response.json()
+                logger.error(f"🔑 Available keys: {[key.get('kid', 'no-kid') for key in jwks_data.get('keys', [])]}")
+        except Exception as debug_error:
+            logger.error(f"🚫 Could not fetch JWKS for debugging: {debug_error}")
+        raise Exception(f"JWKS verification failed: {e}")
 
 def check_scope(ctx: Context, required_scope: str) -> dict:
-    """Check if user has required scope, return upgrade info if insufficient"""
-    user = verify_token_from_context(ctx)
-    user_scopes = user.get("scope", "").split()
+    """Check if user has required scope, return error info if insufficient"""
+    logger.info(f"🔐 Starting scope check for: {required_scope}")
     
-    logger.info(f"🔐 Scope check: required='{required_scope}', user_scopes={user_scopes}, user_email={user.get('email')}")
+    try:
+        user = verify_token_from_context(ctx)
+    except Exception as auth_error:
+        # Handle missing or invalid authentication
+        auth_error_str = str(auth_error).lower()
+        if "missing" in auth_error_str or "authorization header" in auth_error_str:
+            logger.warning(f"⚠️ Missing authentication for scope '{required_scope}': {auth_error}")
+            error_info = {
+                "error_type": "missing_authentication",
+                "error": "Authentication required. Please provide a valid Bearer token.",
+                "required_scope": required_scope,
+                "auth_endpoint": f"{AUTH_SERVER_URI}/api/initial-token",
+                "scope_description": get_scope_description(required_scope),
+                "auth_instructions": "Use the auth_endpoint to obtain a Bearer token"
+            }
+            logger.error(f"❌ Authentication missing: {error_info}")
+            return error_info
+        else:
+            # Other auth errors (expired, invalid, etc.)
+            logger.warning(f"⚠️ Authentication failed for scope '{required_scope}': {auth_error}")
+            error_info = {
+                "error_type": "invalid_authentication",
+                "error": f"Authentication failed: {auth_error}",
+                "required_scope": required_scope,
+                "auth_endpoint": f"{AUTH_SERVER_URI}/api/initial-token",
+                "scope_description": get_scope_description(required_scope),
+                "auth_instructions": "Use the auth_endpoint to obtain a valid Bearer token"
+            }
+            logger.error(f"❌ Authentication failed: {error_info}")
+            return error_info
+    
+    user_scopes = user.get("scope", "").split()
+    user_email = user.get("email", "unknown")
+    
+    logger.info(f"🔐 Scope check: required='{required_scope}', user_scopes={user_scopes}, user_email={user_email}")
     
     if required_scope not in user_scopes:
+        logger.warning(f"⚠️ Insufficient scope for {user_email}: needs '{required_scope}', has {user_scopes}")
         error_info = {
             "error_type": "insufficient_scope",
             "error": f"Insufficient scope. Required: {required_scope}",
             "required_scope": required_scope,
-            "user_scopes": user_scopes,
+            "current_scopes": user_scopes,
             "scope_upgrade_endpoint": f"{AUTH_SERVER_URI}/api/upgrade-scope",
             "scope_description": get_scope_description(required_scope),
             "upgrade_instructions": "Use the scope_upgrade_endpoint to request additional permissions"
         }
         logger.error(f"❌ Scope check failed: {error_info}")
-        # Return scope upgrade information instead of raising exception
-        raise Exception(json.dumps(error_info))
+        
+        # Return error info instead of raising exception
+        return error_info
     
-    logger.info(f"✅ Scope check passed for {user.get('email')}")
+    logger.info(f"✅ Scope check passed for {user_email}")
     return user
 
 def get_scope_description(scope: str) -> str:
     """Get human-readable description for a scope"""
     scope_descriptions = {
-        "read:files": "Read file system information and list directory contents",
-        "execute:commands": "Execute system commands with safety restrictions"
+        "list_files": "List files in a directory with metadata",
+        "execute_command": "Execute system commands with safety restrictions",
+        "get_server_info": "Get server information and authentication status",
+        "get_oauth_metadata": "Get OAuth 2.0 Protected Resource Metadata",
+        "health_check": "Perform a health check of the server",
+        "list_tool_scopes": "List all available tools and their required scopes",
+        "verify_domain": "Verify domain ownership for MCP server registration"
     }
     return scope_descriptions.get(scope, f"Access to {scope}")
-
-# Helper function to handle scope errors in tools
-async def handle_scope_error(ctx: Context, error_msg: str) -> Dict[str, Any]:
-    """Handle scope-related errors and return upgrade information"""
-    try:
-        error_data = json.loads(error_msg)
-        if error_data.get("error_type") == "insufficient_scope":
-            await ctx.info(f"Scope upgrade required: {error_data['required_scope']}")
-            return {
-                "success": False,
-                "error_type": "insufficient_scope",
-                "error": error_data["error"],
-                "required_scope": error_data["required_scope"],
-                "user_scopes": error_data["user_scopes"],
-                "scope_upgrade_endpoint": error_data["scope_upgrade_endpoint"],
-                "scope_description": error_data["scope_description"],
-                "upgrade_instructions": error_data["upgrade_instructions"],
-                "upgrade_example": {
-                    "method": "POST",
-                    "url": error_data["scope_upgrade_endpoint"],
-                    "headers": {"Content-Type": "application/json"},
-                    "body": {"scopes": [error_data["required_scope"]]}
-                }
-            }
-    except (json.JSONDecodeError, KeyError):
-        pass
-    
-    # Fallback for other errors
-    return {
-        "success": False,
-        "error": error_msg
-    }
 
 # MCP Tools with proper Context-based authentication
 @mcp.tool()
@@ -187,7 +221,7 @@ async def list_files(ctx: Context, directory: str = ".") -> Dict[str, Any]:
     """
     List files in a directory.
     
-    **Required Scope:** read:files
+    **Required Scope:** list_files
     **Description:** Provides read-only access to list directory contents and file metadata.
     
     Args:
@@ -197,52 +231,53 @@ async def list_files(ctx: Context, directory: str = ".") -> Dict[str, Any]:
     Returns:
         Dictionary containing directory listing with file information
     """
-    try:
-        # Verify authentication and scope
-        user = check_scope(ctx, "read:files")
-        await ctx.info(f"User {user.get('email')} listing files in directory: {directory}")
-        
-        if not os.path.exists(directory):
-            return {
-                "success": False,
-                "error": "Directory not found",
-                "directory": directory
-            }
-        
-        files = []
-        for item in os.listdir(directory):
-            item_path = os.path.join(directory, item)
-            try:
-                stat_info = os.stat(item_path)
-                files.append({
-                    "name": item,
-                    "type": "directory" if os.path.isdir(item_path) else "file",
-                    "size": stat_info.st_size if os.path.isfile(item_path) else None,
-                    "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
-                })
-            except (OSError, IOError) as e:
-                files.append({
-                    "name": item,
-                    "type": "unknown",
-                    "error": str(e)
-                })
-        
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, list_files.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
+    await ctx.info(f"User {user.get('email')} listing files in directory: {directory}")
+    
+    if not os.path.exists(directory):
         return {
-            "success": True,
-            "directory": os.path.abspath(directory),
-            "files": files,
-            "count": len(files),
-            "user": user.get('email')
+            "success": False,
+            "error": "Directory not found",
+            "directory": directory
         }
-    except Exception as e:
-        return await handle_scope_error(ctx, str(e))
+    
+    files = []
+    for item in os.listdir(directory):
+        item_path = os.path.join(directory, item)
+        try:
+            stat_info = os.stat(item_path)
+            files.append({
+                "name": item,
+                "type": "directory" if os.path.isdir(item_path) else "file",
+                "size": stat_info.st_size if os.path.isfile(item_path) else None,
+                "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+            })
+        except (OSError, IOError) as e:
+            files.append({
+                "name": item,
+                "type": "unknown",
+                "error": str(e)
+            })
+    
+    return {
+        "success": True,
+        "directory": os.path.abspath(directory),
+        "files": files,
+        "count": len(files),
+        "user": user.get('email')
+    }
 
 @mcp.tool()
 async def execute_command(ctx: Context, command: str) -> Dict[str, Any]:
     """
     Execute a safe system command.
     
-    **Required Scope:** execute:commands
+    **Required Scope:** execute_command
     **Description:** Allows execution of system commands with safety restrictions.
     **Security:** Dangerous commands (rm, del, format, etc.) are blocked for safety.
     
@@ -253,22 +288,26 @@ async def execute_command(ctx: Context, command: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing command execution results
     """
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, execute_command.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
+    await ctx.info(f"User {user.get('email')} executing command: {command}")
+    
+    # Basic command validation - reject dangerous commands
+    dangerous_commands = ['rm', 'del', 'format', 'mkfs', 'dd', 'fdisk', 'shutdown', 'reboot']
+    cmd_parts = shlex.split(command)
+    if any(dangerous in cmd_parts[0].lower() for dangerous in dangerous_commands):
+        return {
+            "success": False,
+            "error": "Command rejected for security reasons",
+            "command": command
+        }
+    
+    # Execute command with timeout
     try:
-        # Verify authentication and scope
-        user = check_scope(ctx, "execute:commands")
-        await ctx.info(f"User {user.get('email')} executing command: {command}")
-        
-        # Basic command validation - reject dangerous commands
-        dangerous_commands = ['rm', 'del', 'format', 'mkfs', 'dd', 'fdisk', 'shutdown', 'reboot']
-        cmd_parts = shlex.split(command)
-        if any(dangerous in cmd_parts[0].lower() for dangerous in dangerous_commands):
-            return {
-                "success": False,
-                "error": "Command rejected for security reasons",
-                "command": command
-            }
-        
-        # Execute command with timeout
         result = subprocess.run(
             command,
             shell=True,
@@ -292,15 +331,13 @@ async def execute_command(ctx: Context, command: str) -> Dict[str, Any]:
             "error": "Command timed out",
             "command": command
         }
-    except Exception as e:
-        return await handle_scope_error(ctx, str(e))
 
 @mcp.tool()
 async def get_server_info(ctx: Context) -> Dict[str, Any]:
     """
     Get server information and authentication status.
     
-    **Required Scope:** Any valid token (no specific scope required)
+    **Required Scope:** get_server_info
     **Description:** Provides basic server information and user authentication details.
     
     Args:
@@ -309,8 +346,12 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
     Returns:
         Dictionary containing server and authentication information
     """
-    # Verify authentication (any valid token)
-    user = verify_token_from_context(ctx)
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, get_server_info.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
     await ctx.info(f"User {user.get('email')} requested server info")
     
     return {
@@ -329,7 +370,7 @@ async def get_oauth_metadata(ctx: Context) -> Dict[str, Any]:
     """
     Get OAuth 2.0 Protected Resource Metadata (RFC 9728).
     
-    **Required Scope:** Any valid token (no specific scope required)
+    **Required Scope:** get_oauth_metadata
     **Description:** Returns OAuth 2.0 metadata for this protected resource.
     
     Args:
@@ -338,14 +379,18 @@ async def get_oauth_metadata(ctx: Context) -> Dict[str, Any]:
     Returns:
         OAuth 2.0 Protected Resource Metadata
     """
-    # Verify authentication (any valid token)
-    user = verify_token_from_context(ctx)
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, get_oauth_metadata.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
     await ctx.info(f"User {user.get('email')} requested OAuth metadata")
     
     return {
         "resource": SERVER_URI,
         "authorization_servers": [AUTH_SERVER_URI],
-        "scopes_supported": ["read:files", "execute:commands"],
+        "scopes_supported": ["list_files", "execute_command", "get_server_info", "get_oauth_metadata", "health_check", "list_tool_scopes", "verify_domain"],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{SERVER_URI}/docs"
     }
@@ -355,7 +400,7 @@ async def health_check(ctx: Context) -> Dict[str, Any]:
     """
     Perform a health check of the server.
     
-    **Required Scope:** Any valid token (no specific scope required)
+    **Required Scope:** health_check
     **Description:** Verifies server health and user authentication status.
     
     Args:
@@ -364,24 +409,38 @@ async def health_check(ctx: Context) -> Dict[str, Any]:
     Returns:
         Health status information
     """
-    # Verify authentication (any valid token)
-    user = verify_token_from_context(ctx)
+    logger.info(f"🏥 health_check: Starting health check")
+    
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, health_check.__name__)
+    logger.info(f"🏥 health_check: scope_result type = {type(scope_result)}")
+    logger.info(f"🏥 health_check: scope_result = {scope_result}")
+    
+    if "error_type" in scope_result:
+        logger.error(f"🏥 health_check: ERROR DETECTED - returning error info: {scope_result}")
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
+    logger.info(f"🏥 health_check: SUCCESS - user authenticated: {user.get('email')}")
     await ctx.info(f"User {user.get('email')} requested health check")
     
-    return {
+    result = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "server_name": SERVER_NAME,
         "server_version": SERVER_VERSION,
         "checked_by": user.get('email')
     }
+    
+    logger.info(f"🏥 health_check: Returning success result: {result}")
+    return result
 
 @mcp.tool()
 async def list_tool_scopes(ctx: Context) -> Dict[str, Any]:
     """
     List all available tools and their required scopes.
     
-    **Required Scope:** Any valid token (no specific scope required)
+    **Required Scope:** list_tool_scopes
     **Description:** Provides a mapping of tools to their required scopes for authorization planning.
     
     Args:
@@ -390,57 +449,140 @@ async def list_tool_scopes(ctx: Context) -> Dict[str, Any]:
     Returns:
         Dictionary mapping tool names to their scope requirements
     """
-    # Verify authentication (any valid token)
-    user = verify_token_from_context(ctx)
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, list_tool_scopes.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
     await ctx.info(f"User {user.get('email')} requested tool scope information")
     
     tool_scopes = {
         "list_files": {
-            "required_scope": "read:files",
+            "required_scope": "list_files",
             "description": "List files in a directory",
             "scope_description": "Provides read-only access to list directory contents and file metadata"
         },
         "execute_command": {
-            "required_scope": "execute:commands", 
+            "required_scope": "execute_command", 
             "description": "Execute a safe system command",
             "scope_description": "Allows execution of system commands with safety restrictions"
         },
         "get_server_info": {
-            "required_scope": "none",
+            "required_scope": "get_server_info",
             "description": "Get server information and authentication status",
-            "scope_description": "Any valid token (no specific scope required)"
+            "scope_description": "Provides basic server information and user authentication details"
         },
         "get_oauth_metadata": {
-            "required_scope": "none",
+            "required_scope": "get_oauth_metadata",
             "description": "Get OAuth 2.0 Protected Resource Metadata",
-            "scope_description": "Any valid token (no specific scope required)"
+            "scope_description": "Returns OAuth 2.0 metadata for this protected resource"
         },
         "health_check": {
-            "required_scope": "none",
+            "required_scope": "health_check",
             "description": "Perform a health check of the server",
-            "scope_description": "Any valid token (no specific scope required)"
+            "scope_description": "Verifies server health and user authentication status"
         },
         "list_tool_scopes": {
-            "required_scope": "none",
+            "required_scope": "list_tool_scopes",
             "description": "List all available tools and their required scopes",
-            "scope_description": "Any valid token (no specific scope required)"
+            "scope_description": "Provides a mapping of tools to their required scopes for authorization planning"
+        },
+        "verify_domain": {
+            "required_scope": "verify_domain",
+            "description": "Verify domain ownership for MCP server registration",
+            "scope_description": "Supports domain verification for enhanced security during MCP server registration"
         }
     }
     
     return {
         "server_name": SERVER_NAME,
         "server_version": SERVER_VERSION,
-        "available_scopes": ["read:files", "execute:commands"],
+        "available_scopes": ["list_files", "execute_command", "get_server_info", "get_oauth_metadata", "health_check", "list_tool_scopes", "verify_domain"],
         "tool_scope_mapping": tool_scopes,
         "user_scopes": user.get('scope', '').split(),
         "timestamp": datetime.now().isoformat(),
         "checked_by": user.get('email')
     }
 
+@mcp.tool()
+async def verify_domain(ctx: Context, domain: str, verification_token: str) -> Dict[str, Any]:
+    """
+    Verify domain ownership for MCP server registration (Security Enhancement).
+    
+    **Required Scope:** verify_domain
+    **Description:** Supports domain verification for enhanced security during MCP server registration.
+    
+    Args:
+        ctx: MCP context for authentication
+        domain: Domain to verify ownership for
+        verification_token: Token provided by authorization server for verification
+    
+    Returns:
+        Domain verification result
+    """
+    # Verify authentication and scope
+    scope_result = check_scope(ctx, verify_domain.__name__)
+    if "error_type" in scope_result:
+        return scope_result  # Return the error info directly
+    
+    user = scope_result  # If no error, this is the user info
+    await ctx.info(f"User {user.get('email')} requested domain verification for: {domain}")
+    
+    # This is a demonstration implementation
+    # In production, this would verify DNS TXT records or HTTP challenges
+    return {
+        "domain": domain,
+        "verification_token": verification_token,
+        "verification_status": "pending",
+        "verification_method": "dns_txt_record",
+        "verification_instructions": f"Add TXT record: _mcp-verification.{domain} = {verification_token}",
+        "verification_uri": f"https://{domain}/.well-known/mcp-verification.txt",
+        "expires_at": (datetime.now() + timedelta(hours=24)).isoformat(),
+        "verified_by": user.get('email'),
+        "server_uri": SERVER_URI,
+        "message": "Domain verification initiated - follow instructions to complete"
+    }
+
+# Security enhancements
+from security_enhancements import (
+    create_domain_verification_response
+)
+
+# Add HTTP endpoint for OAuth discovery (RFC 9728)
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
+    """
+    OAuth 2.0 Protected Resource Metadata (RFC 9728) - HTTP Discovery Endpoint
+    
+    This endpoint allows clients to discover authorization servers and supported scopes
+    without requiring authentication. This is essential for the OAuth discovery flow.
+    """
+    return JSONResponse({
+        "resource": SERVER_URI,
+        "authorization_servers": [AUTH_SERVER_URI],
+        "scopes_supported": [
+            "list_files", 
+            "execute_command", 
+            "get_server_info", 
+            "get_oauth_metadata", 
+            "health_check", 
+            "list_tool_scopes", 
+            "verify_domain"
+        ],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{SERVER_URI}/docs",
+        "discovery_endpoint": f"{SERVER_URI}/.well-known/oauth-protected-resource"
+    })
+
 if __name__ == "__main__":
     logger.info(f"Starting {SERVER_NAME} v{SERVER_VERSION}")
     logger.info(f"Server URI: {SERVER_URI}")
     logger.info(f"Auth server: {AUTH_SERVER_URI}")
-    logger.info("Available tools: list_files, execute_command, get_server_info, get_oauth_metadata, health_check, list_tool_scopes")
+    logger.info("Available tools: list_files, execute_command, get_server_info, get_oauth_metadata, health_check, list_tool_scopes, verify_domain")
+    logger.info("Security enhancements: Enhanced Protected Resource Metadata, Domain Verification")
     
     mcp.run("sse") 

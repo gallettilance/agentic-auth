@@ -550,6 +550,159 @@
             border-radius: 4px;
             font-weight: bold;
         }
+        
+        /* Token Dashboard Styles */
+        .token-dashboard {
+            background: white;
+            border-radius: 12px;
+            margin: 20px auto;
+            max-width: 1200px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .token-dashboard-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 20px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .token-dashboard-toggle {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .token-dashboard-toggle:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .token-dashboard-content {
+            padding: 20px;
+            display: none;
+        }
+        
+        .token-dashboard-content.expanded {
+            display: block;
+        }
+        
+        .token-section {
+            margin-bottom: 24px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .token-section-header {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .token-item {
+            padding: 16px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .token-item:last-child {
+            border-bottom: none;
+        }
+        
+        .token-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .token-type {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .token-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .token-available {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .token-missing {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .token-preview {
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            font-size: 12px;
+            color: #6c757d;
+            background: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 8px 0;
+            word-break: break-all;
+        }
+        
+        .token-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        
+        .jwt-link {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        
+        .jwt-link:hover {
+            transform: translateY(-1px);
+            color: white;
+            text-decoration: none;
+        }
+        
+        .refresh-token-btn {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .refresh-token-btn:hover {
+            transform: translateY(-1px);
+        }
+        
+        .refresh-token-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
     </style>
 </head>
 <body>
@@ -567,8 +720,37 @@
             </div>
         </div>
         <button onclick="clearChatHistory()" class="nav-btn" style="background: linear-gradient(135deg, #ffc107 0%, #ff8c00 100%); margin-right: 10px;">🗑️ Clear History</button>
-        <a href="http://localhost:8002/dashboard" class="nav-btn">🔐 Auth Dashboard</a>
+        <a href="http://localhost:8003/dashboard" class="nav-btn">🔐 Auth Dashboard</a>
         <a href="/logout" class="logout-btn">🚪 Logout</a>
+    </div>
+    
+    <!-- Token Dashboard -->
+    <div class="token-dashboard">
+        <div class="token-dashboard-header">
+            <span>🔐 Token Dashboard</span>
+            <button class="token-dashboard-toggle" onclick="toggleTokenDashboard()">
+                <span id="token-toggle-text">Show Tokens</span>
+            </button>
+        </div>
+        <div class="token-dashboard-content" id="token-dashboard-content">
+            <div class="token-section">
+                <div class="token-section-header">
+                    🎫 Llama Stack Token (Agent Authentication)
+                </div>
+                <div class="token-item" id="llama-stack-token-item">
+                    <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="token-section">
+                <div class="token-section-header">
+                    🔧 MCP Server Tokens (Tool Authentication)
+                </div>
+                <div id="mcp-tokens-container">
+                    <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
     </div>
     
     <div class="chat-container">
@@ -835,7 +1017,7 @@
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
             
-            const response = await fetch('/chat', {
+            const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1036,7 +1218,7 @@
         async function handleRegularResponse(message) {
             try {
                 console.log('Sending regular message:', message);
-                const response = await fetch('/chat', {
+                const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1266,6 +1448,28 @@
                     if (data.token_updated) {
                         console.log('🎫 Token updated with new scopes:', data.new_scopes);
                         
+                        // Determine the appropriate notification message and action
+                        let notificationMessage = '';
+                        let shouldAutoRetry = false;
+                        
+                        if (data.has_manual_approvals && data.has_auto_approvals) {
+                            // Mixed approvals - show notification but don't auto-retry
+                            notificationMessage = '✅ New permissions approved! Some were manual approvals - you can retry your requests manually.';
+                            shouldAutoRetry = false;
+                        } else if (data.has_manual_approvals) {
+                            // Only manual approvals - show notification but don't auto-retry
+                            notificationMessage = '✅ New permissions approved by admin! You can retry your requests manually.';
+                            shouldAutoRetry = false;
+                        } else if (data.has_auto_approvals) {
+                            // Only auto-approvals - show notification and auto-retry
+                            notificationMessage = '✅ New permissions auto-approved! Auto-retrying requests...';
+                            shouldAutoRetry = true;
+                        } else {
+                            // Fallback - treat as manual approval
+                            notificationMessage = '✅ New permissions approved! You can retry your requests manually.';
+                            shouldAutoRetry = false;
+                        }
+                        
                         // Show a notification to the user
                         const notification = document.createElement('div');
                         notification.style.cssText = `
@@ -1280,18 +1484,20 @@
                             z-index: 1000;
                             font-weight: 600;
                         `;
-                        notification.textContent = '✅ New permissions approved! Auto-retrying requests...';
+                        notification.textContent = notificationMessage;
                         document.body.appendChild(notification);
                         
-                        // Remove notification after 3 seconds
+                        // Remove notification after 5 seconds (longer for manual approvals)
                         setTimeout(() => {
                             if (notification.parentNode) {
                                 notification.parentNode.removeChild(notification);
                             }
-                        }, 3000);
+                        }, shouldAutoRetry ? 3000 : 5000);
                         
-                        // Auto-retry any pending authorization requests
-                        await autoRetryPendingRequests(data.new_scopes);
+                        // Only auto-retry if there are auto-approvals
+                        if (shouldAutoRetry) {
+                            await autoRetryPendingRequests(data.new_scopes);
+                        }
                         
                         return true; // Token was updated
                     }
@@ -1367,15 +1573,281 @@
             loadChatHistory();
             messageInput.focus();
             
+            // Initialize token dashboard
+            refreshTokenDashboard();
+            
             // Start periodic token update checking
             setInterval(checkForTokenUpdates, 5000); // Check every 5 seconds
             
             // Clean up old pending requests every minute
             setInterval(cleanupOldPendingRequests, 60000);
+            
+            // Refresh token dashboard every 10 seconds
+            setInterval(refreshTokenDashboard, 10000);
         });
 
-        // Focus input on load (fallback)
-        messageInput.focus();
+        // Token Dashboard Functions
+        function toggleTokenDashboard() {
+            const content = document.getElementById('token-dashboard-content');
+            const toggleText = document.getElementById('token-toggle-text');
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                toggleText.textContent = 'Show Tokens';
+            } else {
+                content.classList.add('expanded');
+                toggleText.textContent = 'Hide Tokens';
+                refreshTokenDashboard(); // Refresh when opening
+            }
+        }
+
+        async function refreshTokenDashboard() {
+            try {
+                const response = await fetch('/api/token-info');
+                if (response.ok) {
+                    const data = await response.json();
+                    updateLlamaStackTokenDisplay(data.llama_stack_token);
+                    updateMCPTokensDisplay(data.mcp_tokens);
+                }
+            } catch (error) {
+                console.error('Error refreshing token dashboard:', error);
+            }
+        }
+
+        function updateLlamaStackTokenDisplay(tokenInfo) {
+            const container = document.getElementById('llama-stack-token-item');
+            
+            if (tokenInfo && tokenInfo.token) {
+                const preview = tokenInfo.token.length > 50 
+                    ? tokenInfo.token.substring(0, 50) + '...' 
+                    : tokenInfo.token;
+                
+                container.innerHTML = `
+                    <div class="token-info">
+                        <span class="token-type">🎫 Llama Stack Authentication</span>
+                        <span class="token-status token-available">✅ Available</span>
+                    </div>
+                    <div class="token-preview">${escapeHtml(preview)}</div>
+                    <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'http://localhost:8321')}</code></div>
+                    <div>Scopes: <code>${tokenInfo.scopes ? tokenInfo.scopes.join(', ') : 'None'}</code></div>
+                    <div class="token-actions">
+                        <a href="${buildJwtIoUrl(tokenInfo.token)}" target="_blank" class="jwt-link">
+                            🔍 Debug on JWT.io
+                        </a>
+                        <button class="refresh-token-btn" onclick="refreshLlamaStackToken()">
+                            🔄 Refresh Token
+                        </button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="token-info">
+                        <span class="token-type">🎫 Llama Stack Authentication</span>
+                        <span class="token-status token-missing">❌ Missing</span>
+                    </div>
+                    <div style="color: #6c757d; font-style: italic;">
+                        No Llama Stack token available. This is required for agent communication.
+                    </div>
+                    <div class="token-actions">
+                        <button class="refresh-token-btn" onclick="refreshLlamaStackToken()">
+                            🔄 Get Token
+                        </button>
+                    </div>
+                `;
+            }
+        }
+
+        function updateMCPTokensDisplay(mcpTokens) {
+            const container = document.getElementById('mcp-tokens-container');
+            
+            if (mcpTokens && Object.keys(mcpTokens).length > 0) {
+                let html = '';
+                
+                for (const [serverUrl, tokenInfo] of Object.entries(mcpTokens)) {
+                    const hasToken = tokenInfo && tokenInfo.token && tokenInfo.token !== 'NO_TOKEN_YET';
+                    const preview = hasToken && tokenInfo.token.length > 50 
+                        ? tokenInfo.token.substring(0, 50) + '...' 
+                        : tokenInfo.token;
+                    
+                    html += `
+                        <div class="token-item">
+                            <div class="token-info">
+                                <span class="token-type">🔧 ${escapeHtml(serverUrl)}</span>
+                                <span class="token-status ${hasToken ? 'token-available' : 'token-missing'}">
+                                    ${hasToken ? '✅ Available' : '❌ Missing'}
+                                </span>
+                            </div>
+                            ${hasToken ? `
+                                <div class="token-preview">${escapeHtml(preview)}</div>
+                                <div>Scopes: <code>${tokenInfo.scopes ? tokenInfo.scopes.join(', ') : 'None'}</code></div>
+                                <div class="token-actions">
+                                    <a href="${buildJwtIoUrl(tokenInfo.token)}" target="_blank" class="jwt-link">
+                                        🔍 Debug on JWT.io
+                                    </a>
+                                    <button class="refresh-token-btn" onclick="refreshMCPToken('${escapeHtml(serverUrl)}')">
+                                        🔄 Refresh Token
+                                    </button>
+                                </div>
+                            ` : `
+                                <div style="color: #6c757d; font-style: italic;">
+                                    No token available for this MCP server. Tokens are created when tools require authentication.
+                                </div>
+                                <div class="token-actions">
+                                    <button class="refresh-token-btn" onclick="requestMCPToken('${escapeHtml(serverUrl)}')">
+                                        🔄 Request Token
+                                    </button>
+                                </div>
+                            `}
+                        </div>
+                    `;
+                }
+                
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = `
+                    <div class="token-item">
+                        <div style="color: #6c757d; font-style: italic; text-align: center; padding: 20px;">
+                            No MCP server tokens available yet.<br>
+                            Tokens will be created automatically when you use tools that require authentication.
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function buildJwtIoUrl(token) {
+            if (!token) return '#';
+            return `https://jwt.io/#debugger-io?token=${encodeURIComponent(token)}`;
+        }
+
+        async function refreshLlamaStackToken() {
+            const button = event.target;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = '🔄 Refreshing...';
+            
+            try {
+                const response = await fetch('/api/refresh-llama-stack-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        refreshTokenDashboard();
+                        showNotification('✅ Llama Stack token refreshed successfully!', 'success');
+                    } else {
+                        throw new Error(data.error || 'Failed to refresh token');
+                    }
+                } else {
+                    throw new Error('Failed to refresh token');
+                }
+            } catch (error) {
+                console.error('Error refreshing Llama Stack token:', error);
+                showNotification('❌ Failed to refresh Llama Stack token', 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        }
+
+        async function refreshMCPToken(serverUrl) {
+            const button = event.target;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = '🔄 Refreshing...';
+            
+            try {
+                const response = await fetch('/api/refresh-mcp-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_url: serverUrl })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        refreshTokenDashboard();
+                        showNotification(`✅ MCP token refreshed for ${serverUrl}!`, 'success');
+                    } else {
+                        throw new Error(data.error || 'Failed to refresh token');
+                    }
+                } else {
+                    throw new Error('Failed to refresh token');
+                }
+            } catch (error) {
+                console.error('Error refreshing MCP token:', error);
+                showNotification(`❌ Failed to refresh MCP token for ${serverUrl}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        }
+
+        async function requestMCPToken(serverUrl) {
+            const button = event.target;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = '🔄 Requesting...';
+            
+            try {
+                const response = await fetch('/api/request-mcp-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        server_url: serverUrl,
+                        required_scope: 'basic_access'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        refreshTokenDashboard();
+                        showNotification(`✅ MCP token requested for ${serverUrl}!`, 'success');
+                    } else {
+                        throw new Error(data.error || 'Failed to request token');
+                    }
+                } else {
+                    throw new Error('Failed to request token');
+                }
+            } catch (error) {
+                console.error('Error requesting MCP token:', error);
+                showNotification(`❌ Failed to request MCP token for ${serverUrl}`, 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#667eea';
+            
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: linear-gradient(135deg, ${bgColor} 0%, ${bgColor}dd 100%);
+                color: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                z-index: 1000;
+                font-weight: 600;
+                max-width: 300px;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            // Remove notification after 4 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 4000);
+        }
     </script>
 </body>
 </html> 

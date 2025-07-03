@@ -1,0 +1,56 @@
+graph TB
+    subgraph "User Interface"
+        UI[Chat UI<br/>Port 5001]
+        AD[Admin Dashboard<br/>Port 5002]
+    end
+    
+    subgraph "Authentication & Authorization"
+        AS[Auth Server<br/>Port 8002]
+        DB[(SQLite Database<br/>Users, Roles, Policies)]
+        GA[Google OAuth]
+    end
+    
+    subgraph "AI Agent Platform"
+        LS[Llama Stack<br/>Port 8321]
+        AA[Auth Agent<br/>Custom Implementation]
+    end
+    
+    subgraph "Tool Execution"
+        MCP[MCP Server<br/>Port 8001]
+        TOOLS[System Tools<br/>Files, Commands, APIs]
+    end
+    
+    %% User flows
+    UI -->|1. Login Request| AS
+    AS -->|2. OAuth Flow| GA
+    GA -->|3. User Profile| AS
+    AS -->|4. JWT Tokens| UI
+    
+    %% Admin flows
+    AD -->|Admin Actions| AS
+    AS -->|User Management| DB
+    
+    %% Agent flows
+    UI -->|5. Chat Message| LS
+    LS -->|6. Process Request| AA
+    AA -->|7. Tool Call + JWT| MCP
+    MCP -->|8. Scope Validation| MCP
+    
+    %% Authorization flows
+    MCP -->|9. Insufficient Scope| AA
+    AA -->|10. Request Upgrade| AS
+    AS -->|11. Policy Check| DB
+    AS -->|12. New Token| AA
+    AA -->|13. Retry Tool Call| MCP
+    MCP -->|14. Execute Tool| TOOLS
+    
+    %% Styling
+    classDef frontend fill:#e1f5fe
+    classDef auth fill:#f3e5f5
+    classDef agent fill:#e8f5e8
+    classDef tool fill:#fff3e0
+    
+    class UI,AD frontend
+    class AS,DB,GA auth
+    class LS,AA agent
+    class MCP,TOOLS tool

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MCP Auth Dashboard</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            min-height: 100vh; 
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 16px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+        }
+        .user-info { display: flex; justify-content: space-between; align-items: center; }
+        .logout-btn { 
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); 
+            color: white; 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 8px; 
+            text-decoration: none; 
+            font-weight: 600; 
+        }
+        .tools-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
+            gap: 20px; 
+            margin-bottom: 20px; 
+        }
+        .tool-card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 16px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            transition: transform 0.2s ease; 
+        }
+        .tool-card:hover { transform: translateY(-5px); }
+        .tool-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .tool-name { font-weight: bold; font-size: 16px; color: #2c3e50; }
+        .access-status { padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: bold; }
+        .access-granted { background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); color: #155724; }
+        .access-denied { background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%); color: #721c24; }
+        .tool-description { color: #666; margin-bottom: 12px; line-height: 1.4; }
+        .required-scope { 
+            font-family: monospace; 
+            background: #f8f9fa; 
+            padding: 6px 10px; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            border: 1px solid #e9ecef; 
+        }
+        .test-btn { 
+            background: linear-gradient(135deg, #007bff 0%, #0056b3 100%); 
+            color: white; 
+            padding: 8px 16px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            margin-top: 10px; 
+        }
+        .test-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .admin-section { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 16px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            margin-bottom: 20px; 
+        }
+        .pending-approval { 
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); 
+            border: none; 
+            padding: 16px; 
+            border-radius: 12px; 
+            margin: 12px 0; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        }
+        .approval-actions { margin-top: 12px; }
+        .approve-btn { 
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%); 
+            color: white; 
+            padding: 8px 16px; 
+            border: none; 
+            border-radius: 8px; 
+            margin-right: 10px; 
+            font-weight: 600; 
+            cursor: pointer;
+        }
+        .deny-btn { 
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); 
+            color: white; 
+            padding: 8px 16px; 
+            border: none; 
+            border-radius: 8px; 
+            font-weight: 600; 
+            cursor: pointer;
+        }
+        .title { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            background-clip: text; 
+            -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; 
+            font-weight: bold; 
+        }
+        .role-badge { 
+            display: inline-block; 
+            padding: 4px 12px; 
+            border-radius: 20px; 
+            font-size: 12px; 
+            font-weight: bold; 
+            margin-left: 10px; 
+        }
+        .admin-role { background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); color: white; }
+        .user-role { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="user-info">
+                <div>
+                    <h1 class="title">🔐 Unified MCP Auth Dashboard</h1>
+                    <p>Welcome, <strong>{{ user.email }}</strong> 
+                       <span class="role-badge {{ 'admin-role' if user.is_admin else 'user-role' }}">
+                           {{ user.roles|join(', ') if user.roles else 'user' }}
+                       </span>
+                    </p>
+                    <p>Current Scopes: <code id="current-scopes">{{ user_scopes|join(' ') or 'None' }}</code></p>
+                    {% if not user_scopes %}
+                    <div style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); padding: 12px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #2196f3;">
+                        <strong>🔐 Token Exchange Protocol:</strong> You start with no permissions for security.
+                    </div>
+                    {% endif %}
+                    <p>🔐 JWT Mode: <strong style="color: #28a745;">ASYMMETRIC</strong></p>
+                    {% if current_token %}
+                    <p>🔍 <a href="https://jwt.io/#debugger-io?token={{ current_token }}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none; font-weight: 600;">Debug Token on JWT.io</a>
+                    {% else %}
+                    <p>🔍 No JWT token yet (empty scopes)</p>
+                    {% endif %}
+                       <br><small style="color: #666;">💡 For RS256 verification, paste the public key from <a href="{{ auth_server_url }}/.well-known/jwks.json" target="_blank" style="color: #667eea;">JWKS endpoint</a> into JWT.io or <button onclick="copyPublicKey(this)" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 4px 8px; border: none; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: 5px;">📋 Copy Public Key</button></small></p>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <a href="http://localhost:5001" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 10px 20px; border: none; border-radius: 8px; text-decoration: none; font-weight: 600;">💬 Chat App</a>
+                    <a href="{{ auth_server_url }}/auth/logout" class="logout-btn">🚪 Logout</a>
+                </div>
+            </div>
+        </div>
+        
+        {% if user.is_admin %}
+        <div class="admin-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2>🛡️ Admin: Pending Approvals (<span id="pending-count">{{ pending_approvals|length }}</span>)</h2>
+                <button onclick="refreshApprovals()" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); color: white; padding: 10px 20px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">🔄 Refresh Approvals</button>
+            </div>
+            <div id="approvals-list">
+                {% if pending_approvals %}
+                    {% for req in pending_approvals %}
+                    <div class="pending-approval">
+                        <strong>{{ req.user_email }}</strong> requests access to <strong>{{ req.tool_name }}</strong>
+                        <br>Required scope: <code>{{ req.required_scope }}</code>
+                        <br>Risk level: <strong>{{ req.risk_level }}</strong>
+                        <br>Justification: {{ req.justification }}
+                        <br>Requested: {{ req.requested_at or 'Unknown' }}
+                        <div class="approval-actions">
+                            <button class="approve-btn" onclick="approveRequest('{{ req.request_id }}')">✅ Approve</button>
+                            <button class="deny-btn" onclick="denyRequest('{{ req.request_id }}')">❌ Deny</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p>No pending approvals</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>🔧 Available MCP Tools</h2>
+            <button onclick="refreshTools()" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 10px 20px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">🔄 Refresh Tools</button>
+        </div>
+        <div id="tools-grid" class="tools-grid">
+            {% for tool_name, access in tools.items() %}
+            <div class="tool-card">
+                <div class="tool-header">
+                    <span class="tool-name">{{ get_tool_icon(tool_name) }} {{ tool_name }}</span>
+                    <span class="access-status {{ 'access-granted' if access.has_access else 'access-denied' }}">
+                        {{ '✅ Access Granted' if access.has_access else '🔒 Access Denied' }}
+                    </span>
+                </div>
+                <div class="tool-description">{{ access.description or 'No description available' }}</div>
+                <div class="required-scope">Required: {{ access.required_scope }}</div>
+                <div>
+                    <button class="test-btn" {{ 'disabled' if not access.has_access else '' }} 
+                            onclick="testTool('{{ tool_name }}')">
+                        🧪 Test Tool
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <script>
+        async function testTool(toolName) {
+            try {
+                const response = await fetch('/api/test-tool', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tool_name: toolName })
+                });
+                const result = await response.json();
+                alert(JSON.stringify(result, null, 2));
+            } catch (error) {
+                alert('Error testing tool: ' + error.message);
+            }
+        }
+        
+        async function refreshTools() {
+            let button = null;
+            try {
+                button = document.querySelector('button[onclick="refreshTools()"]');
+                if (button) {
+                    button.disabled = true;
+                    button.textContent = '🔄 Refreshing...';
+                }
+                
+                const response = await fetch('/api/tools');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.tools) {
+                    const scopesElement = document.getElementById('current-scopes');
+                    if (scopesElement) {
+                        scopesElement.textContent = data.user_scopes?.join(' ') || 'None';
+                    }
+                    
+                    // Update JWT.io link with new token if available
+                    if (data.current_token) {
+                        const jwtLink = document.querySelector('a[href*="jwt.io"]');
+                        if (jwtLink) {
+                            jwtLink.href = `https://jwt.io/#debugger-io?token=${data.current_token}`;
+                        }
+                    }
+                    
+                    const toolsGrid = document.getElementById('tools-grid');
+                    if (toolsGrid) {
+                        toolsGrid.innerHTML = '';
+                        
+                        Object.entries(data.tools).forEach(([toolName, access]) => {
+                            const toolCard = document.createElement('div');
+                            toolCard.className = 'tool-card';
+                            toolCard.innerHTML = `
+                                <div class="tool-header">
+                                    <span class="tool-name">${getToolIcon(toolName)} ${toolName}</span>
+                                    <span class="access-status ${access.has_access ? 'access-granted' : 'access-denied'}">
+                                        ${access.has_access ? '✅ Access Granted' : '🔒 Access Denied'}
+                                    </span>
+                                </div>
+                                <div class="tool-description">${access.description || 'No description available'}</div>
+                                <div class="required-scope">Required: ${access.required_scope}</div>
+                                <div>
+                                    <button class="test-btn" ${!access.has_access ? 'disabled' : ''} 
+                                            onclick="testTool('${toolName}')">
+                                        🧪 Test Tool
+                                    </button>
+                                </div>
+                            `;
+                            toolsGrid.appendChild(toolCard);
+                        });
+                    }
+                }
+            } catch (error) {
+                alert('Error refreshing tools: ' + error.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '🔄 Refresh Tools';
+                }
+            }
+        }
+        
+        async function refreshApprovals() {
+            let button = null;
+            try {
+                button = document.querySelector('button[onclick="refreshApprovals()"]');
+                if (button) {
+                    button.disabled = true;
+                    button.textContent = '🔄 Refreshing...';
+                }
+                
+                const response = await fetch('/api/approvals');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update pending count
+                const pendingCountElement = document.getElementById('pending-count');
+                if (pendingCountElement) {
+                    pendingCountElement.textContent = data.approvals?.length || 0;
+                }
+                
+                // Update approvals list
+                const approvalsList = document.getElementById('approvals-list');
+                if (approvalsList) {
+                    if (data.approvals && data.approvals.length > 0) {
+                        approvalsList.innerHTML = '';
+                        data.approvals.forEach(req => {
+                            const approvalDiv = document.createElement('div');
+                            approvalDiv.className = 'pending-approval';
+                            approvalDiv.innerHTML = `
+                                <strong>${req.user_email}</strong> requests access to <strong>${req.tool_name}</strong>
+                                <br>Required scope: <code>${req.required_scope}</code>
+                                <br>Risk level: <strong>${req.risk_level}</strong>
+                                <br>Justification: ${req.justification}
+                                <br>Requested: ${req.requested_at || 'Unknown'}
+                                <div class="approval-actions">
+                                    <button class="approve-btn" onclick="approveRequest('${req.request_id}')">✅ Approve</button>
+                                    <button class="deny-btn" onclick="denyRequest('${req.request_id}')">❌ Deny</button>
+                                </div>
+                            `;
+                            approvalsList.appendChild(approvalDiv);
+                        });
+                    } else {
+                        approvalsList.innerHTML = '<p>No pending approvals</p>';
+                    }
+                }
+            } catch (error) {
+                alert('Error refreshing approvals: ' + error.message);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '🔄 Refresh Approvals';
+                }
+            }
+        }
+        
+        function getToolIcon(toolName) {
+            const icons = {
+                "list_files": "📁",
+                "execute_command": "⚡",
+                "get_server_info": "ℹ️",
+                "health_check": "💚",
+                "read_file": "📖",
+                "write_file": "✏️",
+                "delete_file": "🗑️"
+            };
+            return icons[toolName] || "🔧";
+        }
+        
+        async function approveRequest(requestId) {
+            try {
+                const response = await fetch(`/api/approve/${requestId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `admin_email={{ user.email }}`
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    alert('Request approved successfully!');
+                    await refreshApprovals(); // Refresh approvals list instead of reloading page
+                } else {
+                    alert('Error: ' + (result.detail || result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error approving request: ' + error.message);
+            }
+        }
+        
+        async function denyRequest(requestId) {
+            const reason = prompt('Please provide a reason for denial:');
+            if (!reason) return;
+            
+            try {
+                const response = await fetch(`/api/deny/${requestId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `reason=${encodeURIComponent(reason)}&admin_email={{ user.email }}`
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    alert('Request denied successfully!');
+                    await refreshApprovals(); // Refresh approvals list instead of reloading page
+                } else {
+                    alert('Error: ' + (result.detail || result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error denying request: ' + error.message);
+            }
+        }
+        
+        async function copyPublicKey(button) {
+            try {
+                const response = await fetch('{{ auth_server_url }}/api/public-key');
+                const data = await response.json();
+                
+                if (data.public_key_pem) {
+                    await navigator.clipboard.writeText(data.public_key_pem);
+                    const originalText = button.innerHTML;
+                    button.innerHTML = '✅ Copied!';
+                    button.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                    setTimeout(() => {
+                        button.innerHTML = originalText;
+                        button.style.background = 'linear-gradient(135deg, #17a2b8 0%, #138496 100%)';
+                    }, 2000);
+                } else {
+                    alert('Public key not available');
+                }
+            } catch (error) {
+                alert('Error copying public key: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html> 

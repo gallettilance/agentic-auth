@@ -9,6 +9,7 @@ echo "========================================================"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Function to stop service by port
@@ -40,13 +41,14 @@ stop_by_pid() {
 # Read PIDs from file if it exists
 if [ -f demo_pids.txt ]; then
     echo "📋 Reading process IDs from demo_pids.txt..."
-    read AUTH_PID MCP_PID LLAMA_PID CHAT_PID < demo_pids.txt
+    read AUTH_PID ADMIN_PID MCP_PID LLAMA_PID FRONTEND_PID < demo_pids.txt
     
     # Stop services by PID
-    stop_by_pid "$CHAT_PID" "Chat App"
+    stop_by_pid "$FRONTEND_PID" "Chat Frontend"
     stop_by_pid "$LLAMA_PID" "Llama Stack"
+    stop_by_pid "$ADMIN_PID" "Admin Dashboard"
     stop_by_pid "$MCP_PID" "MCP Server"
-    stop_by_pid "$AUTH_PID" "Unified Auth Server"
+    stop_by_pid "$AUTH_PID" "Auth Server"
     
     # Remove PID file
     rm -f demo_pids.txt
@@ -58,12 +60,11 @@ fi
 # Stop services by port (backup method)
 echo ""
 echo "🔍 Checking ports for any remaining processes..."
-stop_by_port 5001 "Chat App"
+stop_by_port 5001 "Chat Frontend"
 stop_by_port 8321 "Llama Stack"
+stop_by_port 8003 "Admin Dashboard"
+stop_by_port 8002 "Auth Server"
 stop_by_port 8001 "MCP Server"
-stop_by_port 8002 "Unified Auth Server"
-
-# Note: Port 8002 is used by Unified Auth Server (already stopped above)
 
 # Force quit Chrome and clear authentication cookies
 echo ""
@@ -133,7 +134,7 @@ echo ""
 echo "🧹 Cleaning up any remaining demo processes..."
 
 # Kill any remaining Python processes that might be part of the demo
-REMAINING_PIDS=$(ps aux | grep -E "(auth_server|approval_server|unified_auth_server|mcp_server|auth_mcp_server|chat_app)" | grep -v grep | awk '{print $2}')
+REMAINING_PIDS=$(ps aux | grep -E "(auth_server|unified_auth_server|mcp_server|chat_app|admin_dashboard)" | grep -v grep | awk '{print $2}')
 
 if [ -n "$REMAINING_PIDS" ]; then
     echo -e "${YELLOW}🔄 Killing remaining demo processes...${NC}"

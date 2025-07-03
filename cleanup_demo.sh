@@ -78,14 +78,18 @@ echo -e "${YELLOW}💾 Session/cache cleanup:${NC}"
 safe_remove "demo_pids.txt" "process IDs file"
 safe_remove "__pycache__/" "Python cache (root)"
 safe_remove "auth-server/__pycache__/" "Python cache (auth-server)"
-safe_remove "frontend/__pycache__/" "Python cache (frontend)"
+safe_remove "frontends/__pycache__/" "Python cache (frontends)"
+safe_remove "frontends/chat-ui/__pycache__/" "Python cache (chat-ui)"
+safe_remove "frontends/admin-dashboard/__pycache__/" "Python cache (admin-dashboard)"
 safe_remove "mcp/__pycache__/" "Python cache (mcp)"
-safe_remove "frontend/auth-agent/src/auth_agent/__pycache__/" "Python cache (auth-agent)"
+safe_remove "services/__pycache__/" "Python cache (services)"
 
-# Clean up Python egg-info
+# Clean up Python egg-info and build artifacts
 echo ""
 echo -e "${YELLOW}🥚 Python package artifacts:${NC}"
-safe_remove "frontend/auth-agent/src/auth_agent.egg-info/" "auth-agent egg-info"
+safe_remove "services/auth-agent/src/auth_agent.egg-info/" "auth-agent egg-info"
+safe_remove "services/auth-agent/build/" "auth-agent build"
+safe_remove "services/auth-agent/dist/" "auth-agent dist"
 
 # Clean up any .pyc files
 echo ""
@@ -99,6 +103,7 @@ echo -e "${GREEN}✅ Removed Python bytecode files${NC}"
 echo ""
 echo -e "${YELLOW}🌍 Environment cleanup:${NC}"
 safe_remove ".env.local" "local environment file"
+echo -e "${YELLOW}⚠️  Preserving virtual environment directory (env/)${NC}"
 
 # Chrome cookies cleanup
 echo ""
@@ -134,7 +139,7 @@ cleanup_chrome_cookies
 # Clean up any remaining demo processes
 echo ""
 echo -e "${YELLOW}⚡ Process cleanup:${NC}"
-REMAINING_PIDS=$(ps aux | grep -E "(auth_server|unified_auth_server|mcp_server|chat_app)" | grep -v grep | awk '{print $2}' || true)
+REMAINING_PIDS=$(ps aux | grep -E "(auth_server|unified_auth_server|mcp_server|chat_app|admin_dashboard)" | grep -v grep | awk '{print $2}' || true)
 
 if [ -n "$REMAINING_PIDS" ]; then
     echo -e "${YELLOW}🔄 Killing remaining demo processes...${NC}"
@@ -181,4 +186,4 @@ echo -e "${GREEN}🚀 Ready for a fresh demo start!${NC}"
 echo "   Run: ${BLUE}./start_demo.sh${NC}"
 echo ""
 echo -e "${YELLOW}💡 Tip: Use ./stop_demo.sh for normal shutdown (preserves data)${NC}"
-echo -e "${YELLOW}     Use ./cleanup_demo.sh for complete reset (removes everything)${NC}" 
+echo -e "${YELLOW}     Use ./cleanup_demo.sh for complete reset (removes everything)${NC}"
