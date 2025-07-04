@@ -2,351 +2,486 @@
 
 ## Overview
 
-This document outlines the requirements for implementing dynamic OAuth client registration (RFC 7591) and protected resource registration in our authentication system. Unlike traditional OAuth flows where each service registers itself, our system has a unique pattern where the **Chat App requests tokens for MCP Servers**.
+This document outlines the requirements for implementing a **trusted proxy registration pattern** in our authentication system. Unlike traditional OAuth flows where each service registers itself, our system uses a unique pattern where the **Chat App acts as a trusted registration proxy** for Llama Stack and MCP Server resources.
 
-## Current System Architecture
+## System Architecture
 
-### OAuth Actors in Our System
+### Three Distinct Clients
 
 1. **Chat App** (`chat-app`)
-   - **Role**: OAuth client that requests tokens
-   - **Needs**: Client credentials to request tokens for various MCP servers
-   - **Current State**: Statically registered
+   - **Role**: Trusted OAuth client and registration proxy
+   - **Registration**: Static (pre-configured, fully trusted)
+   - **Capabilities**: Requests tokens for other services, registers resources on their behalf
+   - **Token Usage**: Uses session tokens for its own authentication
 
-2. **MCP Server** (`mcp-server`)
-   - **Role**: Protected resource that validates tokens
-   - **Needs**: Resource registration to be known by auth server
-   - **Current State**: Statically configured
+2. **Llama Stack** (`llama-stack`)
+   - **Role**: Protected resource (AI service)
+   - **Registration**: Dynamic via Chat App proxy
+   - **Capabilities**: Validates tokens, provides AI services
+   - **Token Usage**: Receives tokens from Chat App for API calls
 
-3. **Auth Server**
-   - **Role**: Authorization server that issues and validates tokens
-   - **Needs**: Registration endpoints for both clients and resources
+3. **MCP Server** (`mcp-server`)
+   - **Role**: Protected resource (tool execution service)
+   - **Registration**: Dynamic via Chat App proxy
+   - **Capabilities**: Validates tokens, executes tools
+   - **Token Usage**: Receives tokens from Chat App for tool execution
 
-## Token Flow Pattern
-
-Our system uses a **proxy token pattern** where:
-- Chat App requests tokens **for** MCP servers
-- MCP servers validate tokens but don't request them
-- Auth server issues resource-specific tokens
+### Trust Relationships
 
 ```
-Chat App → Auth Server: "Give me a token for MCP Server X"
-Auth Server → Chat App: "Here's a token for MCP Server X"
-Chat App → MCP Server X: "Here's your token"
+Auth Server (fully trusts) → Chat App (trusted proxy)
+Chat App (registers on behalf of) → Llama Stack + MCP Server
+Auth Server (issues tokens for) → Llama Stack + MCP Server
 ```
 
-## Registration Requirements
+## Registration Flow Patterns
 
-### 1. OAuth Client Registration (RFC 7591)
+### 1. Chat App Registration (Static)
 
-For applications that need to **request tokens** (like Chat App):
+**When**: System initialization / deployment
+**Who**: System administrator or deployment script
+**Method**: Pre-configured in auth server database
 
-#### API Endpoint
-```
-POST /register
-Content-Type: application/json
-```
-
-#### Request Format
-```json
-{
-  "client_name": "File Management Chat App",
-  "client_uri": "https://github.com/company/chat-app",
-  "redirect_uris": ["http://localhost:5001/callback"],
-  "token_endpoint_auth_method": "client_secret_basic",
-  "grant_types": [
-    "client_credentials", 
-    "urn:ietf:params:oauth:grant-type:token-exchange"
-  ],
-  "response_types": ["token"],
-  "scope": "mcp:token-request",
-  "software_id": "chat-app",
-  "software_version": "1.0.0"
-}
+```sql
+-- Chat App is statically registered as trusted client
+INSERT INTO oauth_clients (
+    client_id, client_secret_hash, client_name, client_type,
+    proxy_registration_enabled, is_trusted_proxy
+) VALUES (
+    'chat-app', 
+    'hashed_secret', 
+    'Chat Application', 
+    'confidential',
+    TRUE,
+    TRUE
+);
 ```
 
-#### Response Format
-```json
-{
-  "client_id": "chat-app-abc123",
-  "client_secret": "secret-xyz789",
-  "client_id_issued_at": 1640995200,
-  "client_secret_expires_at": 0,
-  "token_endpoint_auth_method": "client_secret_basic",
-  "grant_types": [
-    "client_credentials",
-    "urn:ietf:params:oauth:grant-type:token-exchange"
-  ]
-}
+### 2. Llama Stack Registration (Dynamic via Proxy)
+
+**When**: Chat App startup / service discovery
+**Who**: Chat App (on behalf of Llama Stack)
+**Method**: Trusted proxy registration
+
+```javascript
+// Chat App discovers and registers Llama Stack
+const llamaStackRegistration = {
+  target_uri: 'http://localhost:8321',
+  target_name: 'Llama Stack AI Service',
+  supported_scopes: ['chat:send', 'model:access', 'inference:run'],
+  service_type: 'ai-service'
+};
+
+await chatApp.registerServiceOnBehalf(llamaStackRegistration);
 ```
 
-### 2. Protected Resource Registration (Custom)
+### 3. MCP Server Registration (Dynamic via Proxy)
 
-For MCP servers that need to **validate tokens**:
+**When**: Chat App startup / service discovery
+**Who**: Chat App (on behalf of MCP Server)
+**Method**: Trusted proxy registration
 
-#### API Endpoint
-```
-POST /register-resource
-Content-Type: application/json
-```
+```javascript
+// Chat App discovers and registers MCP Server
+const mcpServerRegistration = {
+  target_uri: 'http://localhost:9001',
+  target_name: 'MCP Tool Execution Server',
+  supported_scopes: ['list_files', 'execute_command', 'read_files'],
+  service_type: 'mcp-server'
+};
 
-#### Request Format
-```json
-{
-  "resource_name": "File Management MCP Server",
-  "resource_uri": "http://localhost:9001",
-  "resource_id": "file-mcp-server",
-  "supported_scopes": ["list_files", "read_files", "write_files"],
-  "token_validation_method": "jwt_shared_secret",
-  "discovery_endpoint": "/.well-known/oauth-protected-resource",
-  "health_check_endpoint": "/health",
-  "software_id": "file-mcp-server",
-  "software_version": "1.0.0"
-}
+await chatApp.registerServiceOnBehalf(mcpServerRegistration);
 ```
 
-#### Response Format
-```json
-{
-  "resource_id": "file-mcp-server-def456",
-  "resource_uri": "http://localhost:9001",
-  "jwt_validation_secret": "shared-secret-abc123",
-  "supported_scopes": ["list_files", "read_files", "write_files"],
-  "token_audience": "http://localhost:9001",
-  "registration_expires_at": 1640995200
-}
-```
-
-## Complete Registration Flow
+## Complete Registration and Token Flow
 
 ```mermaid
 sequenceDiagram
-    participant ChatApp as Chat App
+    participant Admin as System Admin
+    participant ChatApp as Chat App<br/>(Trusted Proxy)
     participant AuthServer as Auth Server
+    participant LlamaStack as Llama Stack
     participant MCPServer as MCP Server
-    participant Admin as Admin Dashboard
+    participant User as End User
     
-    Note over ChatApp, Admin: Phase 1: Registration
-    ChatApp->>AuthServer: POST /register<br/>(OAuth client registration)
-    AuthServer->>AuthServer: Validate metadata
-    AuthServer->>AuthServer: Generate client_id/secret
-    AuthServer->>ChatApp: Return client credentials
+    Note over Admin, User: Phase 1: Static Registration (Deployment Time)
+    Admin->>AuthServer: Pre-configure Chat App<br/>(trusted client with proxy permissions)
+    AuthServer->>AuthServer: Store chat-app credentials<br/>Set proxy_registration_enabled=TRUE
     
-    MCPServer->>AuthServer: POST /register-resource<br/>(Resource registration)
-    AuthServer->>AuthServer: Validate resource metadata
-    AuthServer->>AuthServer: Generate resource_id/config
-    AuthServer->>MCPServer: Return validation config
+    Note over Admin, User: Phase 2: Dynamic Registration (Runtime)
+    ChatApp->>ChatApp: Startup: Discover available services
+    ChatApp->>LlamaStack: GET /health (check if running)
+    LlamaStack->>ChatApp: 200 OK
+    ChatApp->>MCPServer: GET /health (check if running)
+    MCPServer->>ChatApp: 200 OK
     
-    Note over ChatApp, Admin: Phase 2: Token Request
-    ChatApp->>AuthServer: POST /oauth/token<br/>resource=mcp-server-uri<br/>scope=list_files
-    AuthServer->>AuthServer: Validate client credentials
-    AuthServer->>AuthServer: Check resource exists
-    AuthServer->>AuthServer: Generate resource-specific token
-    AuthServer->>ChatApp: Return access_token
+    ChatApp->>AuthServer: POST /register-on-behalf<br/>target: llama-stack<br/>client_id: chat-app
+    AuthServer->>AuthServer: Verify chat-app is trusted proxy
+    AuthServer->>LlamaStack: GET /.well-known/oauth-protected-resource
+    LlamaStack->>AuthServer: Return service metadata
+    AuthServer->>AuthServer: Register llama-stack as protected resource
+    AuthServer->>ChatApp: Registration successful
     
-    Note over ChatApp, Admin: Phase 3: Token Usage
-    ChatApp->>MCPServer: API call with Bearer token
-    MCPServer->>MCPServer: Validate JWT signature
-    MCPServer->>MCPServer: Check audience & scopes
-    MCPServer->>ChatApp: Return API response
+    ChatApp->>AuthServer: POST /register-on-behalf<br/>target: mcp-server<br/>client_id: chat-app
+    AuthServer->>AuthServer: Verify chat-app is trusted proxy
+    AuthServer->>MCPServer: GET /.well-known/oauth-protected-resource
+    MCPServer->>AuthServer: Return service metadata
+    AuthServer->>AuthServer: Register mcp-server as protected resource
+    AuthServer->>ChatApp: Registration successful
     
-    Note over ChatApp, Admin: Phase 4: Admin Oversight
-    Admin->>AuthServer: GET /admin/clients
-    AuthServer->>Admin: List registered clients
-    Admin->>AuthServer: GET /admin/resources
-    AuthServer->>Admin: List registered resources
+    Note over Admin, User: Phase 3: Token Request Flow
+    User->>ChatApp: Send message requiring AI + tools
+    ChatApp->>AuthServer: POST /oauth/token<br/>resource=llama-stack<br/>scope=chat:send
+    AuthServer->>ChatApp: Return llama-stack token
+    
+    ChatApp->>AuthServer: POST /oauth/token<br/>resource=mcp-server<br/>scope=list_files
+    AuthServer->>ChatApp: Return mcp-server token
+    
+    Note over Admin, User: Phase 4: Service Usage
+    ChatApp->>LlamaStack: POST /chat/completions<br/>Bearer: llama-stack-token
+    LlamaStack->>LlamaStack: Validate JWT (audience=llama-stack)
+    LlamaStack->>ChatApp: AI response
+    
+    ChatApp->>MCPServer: POST /tools/list_files<br/>Bearer: mcp-server-token
+    MCPServer->>MCPServer: Validate JWT (audience=mcp-server)
+    MCPServer->>ChatApp: File listing
+    
+    ChatApp->>User: Combined AI + tool response
 ```
 
 ## Implementation Requirements
 
-### 1. Database Schema Changes
+### 1. Enhanced Database Schema
 
-#### New Tables
 ```sql
--- OAuth clients (enhanced)
+-- Enhanced OAuth clients table
 CREATE TABLE oauth_clients (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     client_id TEXT UNIQUE NOT NULL,
     client_secret_hash TEXT NOT NULL,
     client_name TEXT,
-    client_uri TEXT,
     client_type TEXT DEFAULT 'confidential',
     description TEXT,
-    redirect_uris TEXT, -- JSON array
-    grant_types TEXT, -- JSON array
-    response_types TEXT, -- JSON array
-    token_endpoint_auth_method TEXT DEFAULT 'client_secret_basic',
-    software_id TEXT,
-    software_version TEXT,
+    -- Proxy registration capabilities
+    proxy_registration_enabled BOOLEAN DEFAULT FALSE,
+    is_trusted_proxy BOOLEAN DEFAULT FALSE,
+    max_proxy_registrations INTEGER DEFAULT 10,
+    allowed_proxy_patterns TEXT, -- JSON array of URI patterns
+    -- Standard OAuth fields
     token_exchange_enabled BOOLEAN DEFAULT TRUE,
     allowed_audiences TEXT, -- JSON array
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Protected resources (new)
+-- Protected resources table (registered via proxy)
 CREATE TABLE protected_resources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     resource_id TEXT UNIQUE NOT NULL,
     resource_name TEXT NOT NULL,
     resource_uri TEXT UNIQUE NOT NULL,
+    service_type TEXT, -- 'ai-service', 'mcp-server', etc.
     supported_scopes TEXT, -- JSON array
-    token_validation_method TEXT DEFAULT 'jwt_shared_secret',
-    jwt_validation_secret TEXT,
-    discovery_endpoint TEXT,
-    health_check_endpoint TEXT,
+    token_validation_method TEXT DEFAULT 'jwt_asymmetric',
+    -- Registration tracking
+    registered_by TEXT NOT NULL, -- Which client registered this resource
+    registration_method TEXT DEFAULT 'proxy', -- 'static', 'proxy', 'self'
+    discovery_endpoint TEXT DEFAULT '/.well-known/oauth-protected-resource',
+    health_check_endpoint TEXT DEFAULT '/health',
+    -- Metadata
     software_id TEXT,
     software_version TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP NULL
+    last_health_check TIMESTAMP,
+    FOREIGN KEY (registered_by) REFERENCES oauth_clients(client_id)
+);
+
+-- Track proxy registration permissions and limits
+CREATE TABLE proxy_registration_permissions (
+    client_id TEXT NOT NULL,
+    resource_pattern TEXT NOT NULL, -- URI pattern like 'http://localhost:*'
+    max_registrations INTEGER DEFAULT 10,
+    allowed_service_types TEXT, -- JSON array: ['ai-service', 'mcp-server']
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES oauth_clients(client_id)
 );
 ```
 
-### 2. API Endpoints to Implement
+### 2. API Endpoints
 
-#### OAuth Client Registration
-- `POST /register` - RFC 7591 client registration
-- `GET /register/{client_id}` - Get client configuration
-- `PUT /register/{client_id}` - Update client configuration
-- `DELETE /register/{client_id}` - Delete client
+#### Trusted Proxy Registration
+```python
+@app.post("/register-on-behalf")
+async def register_on_behalf(
+    request: ProxyRegistrationRequest,
+    client_credentials: ClientCredentials = Depends(verify_client_credentials)
+):
+    # Verify client is authorized for proxy registration
+    if not await is_trusted_proxy_client(client_credentials.client_id):
+        raise HTTPException(403, "Client not authorized for proxy registration")
+    
+    # Validate registration request
+    await validate_proxy_registration_request(request, client_credentials.client_id)
+    
+    # Verify target service is reachable and supports OAuth
+    service_metadata = await verify_service_oauth_support(request.target_uri)
+    
+    # Register the protected resource
+    resource_registration = await register_protected_resource(
+        resource_uri=request.target_uri,
+        resource_name=request.target_name,
+        service_type=request.service_type,
+        supported_scopes=service_metadata.scopes_supported,
+        registered_by=client_credentials.client_id
+    )
+    
+    return resource_registration
 
-#### Protected Resource Registration
-- `POST /register-resource` - Resource registration
-- `GET /register-resource/{resource_id}` - Get resource configuration
-- `PUT /register-resource/{resource_id}` - Update resource configuration
-- `DELETE /register-resource/{resource_id}` - Delete resource
+class ProxyRegistrationRequest(BaseModel):
+    target_uri: str
+    target_name: str
+    service_type: str  # 'ai-service', 'mcp-server'
+    expected_scopes: Optional[List[str]] = None
+```
 
 #### Enhanced Token Endpoint
-- `POST /oauth/token` - Enhanced with `resource` parameter support
-
-#### Admin Management
-- `GET /admin/clients` - List all registered clients
-- `GET /admin/resources` - List all registered resources
-- `POST /admin/clients/{client_id}/revoke` - Revoke client
-- `POST /admin/resources/{resource_id}/revoke` - Revoke resource
-
-### 3. Token Endpoint Enhancement
-
-The existing token endpoint needs to support the `resource` parameter (RFC 8707):
-
 ```python
 @app.post("/oauth/token")
 async def token_endpoint(
     grant_type: str = Form(...),
     client_id: str = Form(...),
     client_secret: str = Form(...),
-    scope: str = Form(default=""),
-    resource: Optional[str] = Form(default=None)  # New parameter
+    resource: Optional[str] = Form(default=None),  # Target resource URI
+    scope: str = Form(default="")
 ):
     # Validate client credentials
-    # If resource parameter provided:
-    #   - Validate resource exists
-    #   - Generate resource-specific token
-    #   - Set appropriate audience
-    # Return JWT token
+    client = await validate_client_credentials(client_id, client_secret)
+    
+    if resource:
+        # Verify resource exists and was registered by this client or its proxy
+        resource_info = await get_protected_resource(resource)
+        if not resource_info:
+            raise HTTPException(400, "Unknown resource")
+        
+        # Generate resource-specific token
+        token = await generate_resource_token(
+            client_id=client_id,
+            resource_uri=resource,
+            audience=resource,
+            scopes=scope.split(),
+            resource_type=resource_info.service_type
+        )
+    else:
+        # Generate general client token
+        token = await generate_client_token(client_id, scope.split())
+    
+    return {"access_token": token, "token_type": "Bearer"}
 ```
 
-### 4. Validation Logic
+### 3. Chat App Registration Logic
 
-#### Client Registration Validation
-- Validate required fields
-- Check redirect URI format
-- Validate grant types
-- Generate secure client credentials
-- Store registration metadata
+```javascript
+class TrustedProxyRegistrationManager {
+  constructor(authServerUrl, clientCredentials) {
+    this.authServerUrl = authServerUrl;
+    this.clientCredentials = clientCredentials;
+    this.registeredServices = new Map();
+  }
+  
+  async initializeServiceRegistrations() {
+    console.log('Discovering and registering services...');
+    
+    // Discover and register Llama Stack
+    if (await this.isServiceAvailable('http://localhost:8321')) {
+      await this.registerLlamaStack();
+    }
+    
+    // Discover and register MCP Server
+    if (await this.isServiceAvailable('http://localhost:9001')) {
+      await this.registerMCPServer();
+    }
+    
+    // Start health monitoring
+    this.startHealthMonitoring();
+  }
+  
+  async registerLlamaStack() {
+    const registration = {
+      target_uri: 'http://localhost:8321',
+      target_name: 'Llama Stack AI Service',
+      service_type: 'ai-service',
+      expected_scopes: ['chat:send', 'model:access', 'inference:run']
+    };
+    
+    await this.registerServiceOnBehalf(registration);
+  }
+  
+  async registerMCPServer() {
+    // Fetch MCP server capabilities
+    const mcpMetadata = await this.fetchMCPCapabilities('http://localhost:9001');
+    
+    const registration = {
+      target_uri: 'http://localhost:9001',
+      target_name: 'MCP Tool Execution Server',
+      service_type: 'mcp-server',
+      expected_scopes: mcpMetadata.scopes_supported || ['list_files', 'execute_command']
+    };
+    
+    await this.registerServiceOnBehalf(registration);
+  }
+  
+  async registerServiceOnBehalf(registration) {
+    try {
+      const response = await fetch(`${this.authServerUrl}/register-on-behalf`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${btoa(`${this.clientCredentials.client_id}:${this.clientCredentials.client_secret}`)}`
+        },
+        body: JSON.stringify(registration)
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        this.registeredServices.set(registration.target_uri, result);
+        console.log(`✅ Successfully registered ${registration.target_name}`);
+      } else {
+        console.error(`❌ Failed to register ${registration.target_name}:`, await response.text());
+      }
+    } catch (error) {
+      console.error(`❌ Registration error for ${registration.target_name}:`, error);
+    }
+  }
+  
+  async fetchMCPCapabilities(mcpUri) {
+    try {
+      const response = await fetch(`${mcpUri}/.well-known/oauth-protected-resource`);
+      return await response.json();
+    } catch (error) {
+      console.warn(`Could not fetch MCP capabilities from ${mcpUri}, using defaults`);
+      return { scopes_supported: ['list_files', 'execute_command', 'get_server_info'] };
+    }
+  }
+  
+  startHealthMonitoring() {
+    setInterval(async () => {
+      await this.checkServiceHealth();
+    }, 60000); // Check every minute
+  }
+  
+  async checkServiceHealth() {
+    for (const [uri, registration] of this.registeredServices) {
+      const isHealthy = await this.isServiceAvailable(uri);
+      if (!isHealthy) {
+        console.warn(`⚠️  Service ${uri} appears to be down`);
+        // Could implement automatic re-registration or cleanup here
+      }
+    }
+  }
+  
+  async isServiceAvailable(uri) {
+    try {
+      const response = await fetch(`${uri}/health`, { 
+        method: 'GET',
+        timeout: 5000 
+      });
+      return response.ok;
+    } catch (error) {
+      return false;
+    }
+  }
+}
+```
 
-#### Resource Registration Validation
-- Validate resource URI accessibility
-- Check scope format
-- Validate discovery endpoint
-- Generate JWT validation secret
-- Store resource metadata
+## Security Considerations
 
-#### Token Request Validation
-- Validate client credentials
-- Check resource parameter against registered resources
-- Validate requested scopes against resource capabilities
-- Generate resource-specific JWT with correct audience
+### 1. Trusted Proxy Validation
+```python
+async def is_trusted_proxy_client(client_id: str) -> bool:
+    client = await get_client(client_id)
+    return (
+        client and 
+        client.is_active and 
+        client.proxy_registration_enabled and 
+        client.is_trusted_proxy
+    )
+```
 
-### 5. Security Considerations
+### 2. Registration Limits and Patterns
+```python
+PROXY_REGISTRATION_POLICIES = {
+    "chat-app": {
+        "max_registrations": 20,
+        "allowed_patterns": [
+            "http://localhost:*",
+            "https://*.internal.company.com/*"
+        ],
+        "allowed_service_types": ["ai-service", "mcp-server"],
+        "rate_limit": "10 per hour"
+    }
+}
+```
 
-#### Client Registration Security
-- Rate limiting on registration endpoints
-- Client credential entropy requirements
-- Optional registration access tokens
-- Client metadata validation
-
-#### Resource Registration Security
-- Resource URI validation and reachability checks
-- Scope validation against known patterns
-- JWT secret generation and rotation
-- Resource health monitoring
-
-#### Token Security
-- Resource-specific token audiences
-- Scope validation against resource capabilities
-- Token expiration and refresh policies
-- Audit logging for all registrations
+### 3. Service Verification
+```python
+async def verify_service_oauth_support(uri: str) -> ServiceMetadata:
+    # Check if service supports OAuth protected resource pattern
+    try:
+        response = await http_client.get(f"{uri}/.well-known/oauth-protected-resource")
+        metadata = response.json()
+        
+        required_fields = ["scopes_supported", "token_endpoint_auth_methods_supported"]
+        if not all(field in metadata for field in required_fields):
+            raise ValueError("Service doesn't properly support OAuth protected resource pattern")
+        
+        return ServiceMetadata(**metadata)
+    except Exception as e:
+        raise ValueError(f"Service at {uri} doesn't support OAuth: {e}")
+```
 
 ## Migration Strategy
 
-### Phase 1: Database Schema
-1. Add new tables for enhanced client and resource registration
-2. Migrate existing clients to new schema
-3. Add current MCP server as registered resource
+### Phase 1: Enable Trusted Proxy (Week 1)
+1. Update database schema with proxy registration tables
+2. Implement `/register-on-behalf` endpoint
+3. Mark chat-app as trusted proxy client
+4. Add proxy registration permissions
 
-### Phase 2: Registration Endpoints
-1. Implement OAuth client registration (RFC 7591)
-2. Implement protected resource registration
-3. Add admin management endpoints
+### Phase 2: Implement Service Discovery (Week 2)
+1. Add service discovery logic to Chat App
+2. Implement health checking and monitoring
+3. Add automatic registration on startup
+4. Test with Llama Stack and MCP Server
 
-### Phase 3: Token Enhancement
-1. Add resource parameter support to token endpoint
+### Phase 3: Enhanced Token Flow (Week 3)
+1. Update token endpoint to support resource parameter
 2. Implement resource-specific token generation
-3. Update token validation logic
+3. Add audience validation in services
+4. Test end-to-end token flow
 
-### Phase 4: Integration
-1. Update chat app to use dynamic registration
-2. Update MCP servers to register themselves
-3. Add admin dashboard integration
-
-## Testing Requirements
-
-### Unit Tests
-- Client registration validation
-- Resource registration validation
-- Token generation with resource parameter
-- JWT validation with resource-specific audiences
-
-### Integration Tests
-- End-to-end registration flow
-- Token request and validation flow
-- Admin management operations
-- Error handling and edge cases
-
-### Security Tests
-- Registration endpoint security
-- Token security with resource parameter
-- Access control validation
-- Rate limiting and abuse prevention
+### Phase 4: Production Hardening (Week 4)
+1. Add comprehensive logging and monitoring
+2. Implement rate limiting and abuse detection
+3. Add service health monitoring and cleanup
+4. Security audit and penetration testing
 
 ## Success Criteria
 
-1. **Dynamic Client Registration**: New chat applications can register themselves via RFC 7591
-2. **Dynamic Resource Registration**: New MCP servers can register themselves as protected resources
-3. **Resource-Specific Tokens**: Tokens are generated with appropriate audience for target resources
-4. **Admin Oversight**: Administrators can manage all registered clients and resources
-5. **Backward Compatibility**: Existing static registrations continue to work
-6. **Security**: All registration and token flows maintain security best practices
+1. **Trusted Proxy Registration**: Chat App can register Llama Stack and MCP Server automatically
+2. **Service Discovery**: Chat App discovers available services on startup
+3. **Resource-Specific Tokens**: Tokens are generated with correct audience for each service
+4. **Security**: Only trusted Chat App can register resources, with proper validation
+5. **Monitoring**: Health checks and automatic cleanup of stale registrations
+6. **Scalability**: Easy to add new service types and instances
 
-## Future Enhancements
+## Benefits of This Approach
 
-1. **Client Credential Rotation**: Automatic rotation of client secrets
-2. **Resource Discovery**: Automatic discovery of MCP servers on network
-3. **Federation**: Support for external authorization servers
-4. **Advanced Scopes**: Hierarchical and conditional scope systems
-5. **Monitoring**: Real-time monitoring of registered resources and clients
+1. **Security**: Only pre-trusted Chat App can register resources
+2. **Simplicity**: Services don't need registration logic
+3. **Automation**: Automatic service discovery and registration
+4. **Flexibility**: Easy to add new services without auth server changes
+5. **Monitoring**: Centralized health checking and management
+6. **Audit Trail**: All registrations tracked to trusted proxy client
