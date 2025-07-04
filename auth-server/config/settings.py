@@ -11,9 +11,6 @@ SERVER_HOST = os.getenv("SERVER_HOST", "localhost")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8002"))
 SERVER_URI = f"http://{SERVER_HOST}:{SERVER_PORT}"
 
-# MCP Server Configuration
-MCP_SERVER_URI = os.getenv("MCP_SERVER_URI", "http://localhost:8001")
-
 # Google OAuth 2.0 Configuration
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "your-google-client-id")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "your-google-client-secret")

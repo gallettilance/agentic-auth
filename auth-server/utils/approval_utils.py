@@ -5,7 +5,7 @@ Approval system utilities
 import secrets
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Set
+from typing import Dict, List, Any, Set, Optional
 from models.schemas import ApprovalRequest, ApprovalStatus, RiskLevel
 from database import auth_db
 
@@ -50,7 +50,8 @@ def create_approval_request(
     tool_name: str,
     required_scope: str,
     justification: str,
-    risk_level: str = "medium"
+    risk_level: str = "medium",
+    resource_uri: Optional[str] = None
 ) -> ApprovalRequest:
     """Create a new approval request"""
     
@@ -65,6 +66,12 @@ def create_approval_request(
     elif risk_level.lower() == "critical":
         risk_enum = RiskLevel.CRITICAL
     
+    # Store resource URI in metadata for decoupled architecture
+    metadata = {}
+    if resource_uri:
+        metadata['resource_uri'] = resource_uri
+        logger.info(f"📝 Storing resource URI in approval request: {resource_uri}")
+    
     # Create approval request
     approval_request = ApprovalRequest(
         request_id=request_id,
@@ -76,7 +83,8 @@ def create_approval_request(
         justification=justification,
         requested_at=datetime.utcnow(),
         expires_at=datetime.utcnow() + timedelta(hours=24),  # 24 hour expiry
-        status=ApprovalStatus.PENDING
+        status=ApprovalStatus.PENDING,
+        metadata=metadata if metadata else None
     )
     
     # Store in global dict (in production, store in database)
@@ -148,6 +156,12 @@ def approve_request(request_id: str, admin_email: str) -> bool:
         user_email = request.user_email
         new_scope = request.required_scope
         
+        # Extract resource URI from approval request metadata
+        resource_uri = None
+        if request.metadata and 'resource_uri' in request.metadata:
+            resource_uri = request.metadata['resource_uri']
+            logger.info(f"🎫 Using resource URI from approval request: {resource_uri}")
+        
         # Get existing pending update or create new one
         existing_update = auth_db.get_pending_token_update(user_email)
         if existing_update:
@@ -158,11 +172,11 @@ def approve_request(request_id: str, admin_email: str) -> bool:
         else:
             new_scopes = [new_scope]
         
-        # Store the pending update in database
-        auth_db.add_pending_token_update(user_email, new_scopes, 'manual')
+        # Store the pending update in database with the resource URI
+        auth_db.add_pending_token_update(user_email, new_scopes, 'manual', audience=resource_uri)
         
         logger.info(f"✅ Approved request {request_id} by {admin_email}")
-        logger.info(f"🎫 Marked {user_email} for token update with scope: {new_scope}")
+        logger.info(f"🎫 Marked {user_email} for token update with scope: {new_scope}, resource: {resource_uri}")
         return True
         
     except Exception as e:

@@ -236,6 +236,7 @@ class AuthDatabase:
                     user_email TEXT NOT NULL,
                     new_scopes TEXT NOT NULL,
                     approval_type TEXT DEFAULT 'manual',
+                    audience TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_email) REFERENCES users (email),
                     UNIQUE (user_email)
@@ -919,21 +920,28 @@ class AuthDatabase:
             return True
         return self.create_user(email, ["user"], is_admin=False)
     
-    def add_pending_token_update(self, user_email: str, new_scopes: List[str], approval_type: str = 'manual') -> bool:
+    def add_pending_token_update(self, user_email: str, new_scopes: List[str], approval_type: str = 'manual', audience: Optional[str] = None) -> bool:
         """Add or update pending token update for a user"""
         try:
             with self.get_connection() as conn:
+                # First, ensure the audience column exists (for database migration)
+                try:
+                    conn.execute("ALTER TABLE pending_token_updates ADD COLUMN audience TEXT")
+                except sqlite3.OperationalError:
+                    # Column already exists, ignore
+                    pass
+                
                 # Convert scopes list to JSON string
                 scopes_json = json.dumps(new_scopes)
                 
                 # Insert or replace the pending update
                 conn.execute("""
                     INSERT OR REPLACE INTO pending_token_updates 
-                    (user_email, new_scopes, approval_type, created_at)
-                    VALUES (?, ?, ?, datetime('now'))
-                """, (user_email, scopes_json, approval_type))
+                    (user_email, new_scopes, approval_type, audience, created_at)
+                    VALUES (?, ?, ?, ?, datetime('now'))
+                """, (user_email, scopes_json, approval_type, audience))
                 
-                logger.info(f"🎫 Added pending token update for {user_email} with scopes: {new_scopes}")
+                logger.info(f"🎫 Added pending token update for {user_email} with scopes: {new_scopes}, audience: {audience}")
                 return True
                 
         except Exception as e:
@@ -944,8 +952,15 @@ class AuthDatabase:
         """Get pending token update for a user"""
         try:
             with self.get_connection() as conn:
+                # First, ensure the audience column exists (for database migration)
+                try:
+                    conn.execute("ALTER TABLE pending_token_updates ADD COLUMN audience TEXT")
+                except sqlite3.OperationalError:
+                    # Column already exists, ignore
+                    pass
+                
                 update_row = conn.execute("""
-                    SELECT new_scopes, approval_type, created_at 
+                    SELECT new_scopes, approval_type, audience, created_at 
                     FROM pending_token_updates 
                     WHERE user_email = ?
                 """, (user_email,)).fetchone()
@@ -955,6 +970,7 @@ class AuthDatabase:
                         'user_email': user_email,
                         'new_scopes': json.loads(update_row['new_scopes']),
                         'approval_type': update_row['approval_type'],
+                        'audience': update_row['audience'],
                         'created_at': update_row['created_at']
                     }
                 return None
@@ -996,6 +1012,29 @@ class AuthDatabase:
         except Exception as e:
             logger.error(f"❌ Failed to get approved scopes for {user_email}: {e}")
             return []
+
+    def get_user_all_scopes(self, user_email: str) -> List[str]:
+        """Get all scopes for a user (both manually approved and auto-approved)"""
+        try:
+            # Get manually approved scopes
+            manually_approved = self.get_user_approved_scopes(user_email)
+            
+            # Get auto-approved scopes by evaluating all known scopes
+            all_known_scopes = ['list_files', 'execute_command', 'get_server_info', 'health_check', 'list_tool_scopes', 'verify_domain']
+            auto_approved = []
+            
+            for scope in all_known_scopes:
+                policy_result = self.evaluate_scope_request(user_email, [scope])
+                if policy_result.get('auto_approved'):
+                    auto_approved.extend(policy_result['auto_approved'])
+            
+            # Combine and deduplicate
+            all_scopes = list(set(manually_approved + auto_approved))
+            return sorted(all_scopes)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get all scopes for {user_email}: {e}")
+            return self.get_user_approved_scopes(user_email)  # Fallback to manually approved only
 
 # Global database instance
 auth_db = AuthDatabase()

@@ -78,9 +78,14 @@ def chat():
                     logger.info("🔐 Detected authorization error in streaming")
                     error_details = extract_authorization_error_details(error_message)
                     
-                    # Handle MCP token request (separate from Llama Stack token)
-                    required_scope = error_details.get('required_scope', 'execute_command')
-                    mcp_server_url = error_details.get('mcp_server_url', 'http://localhost:8001')
+                    # Extract error details from the error message
+                    tool_name = error_details.get('tool_name', 'unknown')
+                    required_scope = error_details.get('required_scope', tool_name)
+                    mcp_server_url = error_details.get('mcp_server_url')
+                    
+                    if not mcp_server_url:
+                        logger.error("❌ No MCP server URL found in error details - cannot process authorization error")
+                        return jsonify({'error': 'Cannot determine MCP server URL from error'}), 400
                     
                     # Store the pending message for retry
                     message_id = secrets.token_urlsafe(16)
@@ -147,6 +152,9 @@ def get_chat_history():
         
         if not user_email:
             return jsonify({'error': 'User email not found in session'}), 400
+        
+        if not bearer_token:
+            return jsonify({'error': 'Bearer token not found in session'}), 400
         
         if not llama_session_id:
             # No session ID means no chat history yet

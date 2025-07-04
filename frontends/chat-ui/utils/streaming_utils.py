@@ -92,7 +92,11 @@ def create_auth_error_response(error_details: dict, message: str, user_email: st
     """Create a structured authorization error response with proper markers for frontend"""
     tool_name = error_details.get('tool_name', 'unknown')
     required_scope = error_details.get('required_scope', tool_name)
-    mcp_server_url = error_details.get('mcp_server_url', 'http://localhost:8001')
+    mcp_server_url = error_details.get('mcp_server_url')
+    
+    if not mcp_server_url:
+        logger.error("❌ No MCP server URL found in error details - cannot create auth error response")
+        raise ValueError("MCP server URL is required for authorization error response")
     
     # Generate a unique message ID
     message_id = secrets.token_urlsafe(16)
@@ -173,12 +177,13 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                 error_details = extract_authorization_error_details(full_content)
                 tool_name = error_details.get('tool_name', 'unknown')
                 required_scope = error_details.get('required_scope', tool_name)
-                mcp_server_url = error_details.get('mcp_server_url', 'http://localhost:8001')
+                mcp_server_url = error_details.get('mcp_server_url')
                 
-                # Safety check: if mcp_server_url is None, use default
-                if mcp_server_url is None:
-                    mcp_server_url = 'http://localhost:8001'
-                    logger.warning(f"⚠️ MCP server URL was None, using default: {mcp_server_url}")
+                # Safety check: if mcp_server_url is None, fail fast
+                if not mcp_server_url:
+                    logger.error("❌ No MCP server URL found in error details - cannot process authorization error")
+                    yield "❌ Cannot determine MCP server URL from error - unable to process authorization\n\n"
+                    return
                 
                 # DEBUG: Log the extracted error details
                 logger.info(f"🔍 DEBUG: Full error content: {full_content}")
@@ -333,12 +338,13 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
             error_details = extract_authorization_error_details(error_message)
             tool_name = error_details.get('tool_name', 'unknown')
             required_scope = error_details.get('required_scope', tool_name)
-            mcp_server_url = error_details.get('mcp_server_url', 'http://localhost:8001')
+            mcp_server_url = error_details.get('mcp_server_url')
             
-            # Safety check: if mcp_server_url is None, use default
-            if mcp_server_url is None:
-                mcp_server_url = 'http://localhost:8001'
-                logger.warning(f"⚠️ MCP server URL was None, using default: {mcp_server_url}")
+            # Safety check: if mcp_server_url is None, fail fast
+            if not mcp_server_url:
+                logger.error("❌ No MCP server URL found in error details - cannot process authorization error")
+                yield "❌ Cannot determine MCP server URL from error - unable to process authorization\n\n"
+                return
             
             # DEBUG: Log the extracted error details
             logger.info(f"🔍 DEBUG: Full error content: {error_message}")

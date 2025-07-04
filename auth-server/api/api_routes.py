@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends, Form
 from fastapi.responses import JSONResponse
 from auth.session_manager import verify_user_auth
 from models.schemas import TokenPayload
-from utils.mcp_utils import fetch_mcp_tools, get_user_tool_access, test_mcp_tool
+from utils.mcp_utils import get_registered_tools, get_user_tool_access, validate_tool_access
 from utils.approval_utils import (
     evaluate_approval_policy, create_approval_request, get_pending_approvals,
     approve_request, deny_request
@@ -31,6 +31,12 @@ async def get_user_status(user: TokenPayload = Depends(verify_user_auth)):
         user_roles = db_user.roles if db_user else []
         is_admin = "admin" in user_roles
         
+        # Get user's approved scopes from database (not just current token scopes)
+        approved_scopes = auth_db.get_user_all_scopes(user.email)
+        
+        # Also get current token scopes for comparison
+        current_token_scopes = user.scope.split() if user.scope else []
+        
         return {
             "authenticated": True,
             "user": {
@@ -39,7 +45,8 @@ async def get_user_status(user: TokenPayload = Depends(verify_user_auth)):
                 "roles": user_roles,
                 "is_admin": is_admin
             },
-            "scopes": user.scope.split() if user.scope else [],
+            "scopes": approved_scopes,  # Return approved scopes from database
+            "current_token_scopes": current_token_scopes,  # Also include current token scopes
             "token_expires": user.exp
         }
         
@@ -54,14 +61,14 @@ async def get_user_tools(user: TokenPayload = Depends(verify_user_auth)):
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     try:
-        # Fetch MCP tools
-        mcp_tools = await fetch_mcp_tools(user)
+        # Get registered tools from database
+        registered_tools = await get_registered_tools()
         
         # Get user scopes
         user_scopes = user.scope.split() if user.scope else []
         
         # Determine tool access
-        tool_access = get_user_tool_access(user_scopes, mcp_tools)
+        tool_access = get_user_tool_access(user_scopes, registered_tools)
         
         # Generate current token if user has scopes
         current_token = None
@@ -83,7 +90,7 @@ async def api_test_tool(
     request: Request,
     user: TokenPayload = Depends(verify_user_auth)
 ):
-    """Test an MCP tool"""
+    """Validate user access to a tool"""
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -97,13 +104,13 @@ async def api_test_tool(
         # Get user scopes
         user_scopes = user.scope.split() if user.scope else []
         
-        # Test the tool
-        result = await test_mcp_tool(tool_name, user_scopes)
+        # Validate tool access
+        result = await validate_tool_access(tool_name, user_scopes)
         
         return result
         
     except Exception as e:
-        logger.error(f"❌ Tool test failed: {e}")
+        logger.error(f"❌ Tool validation failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/upgrade-scope")
@@ -120,8 +127,9 @@ async def upgrade_scope(
         scopes = data.get('scopes', [])
         justification = data.get('justification', 'User requested additional permissions')
         current_token = data.get('current_token')  # Current MCP token to upgrade
+        resource_uri = data.get('resource')  # MCP server URI that needs the scope
         
-        logger.info(f"🔄 Scope upgrade request from {user.email} for scopes: {scopes}")
+        logger.info(f"🔄 Scope upgrade request from {user.email} for scopes: {scopes}, resource: {resource_uri}")
         
         if not scopes:
             raise HTTPException(status_code=400, detail="No scopes requested")
@@ -143,7 +151,8 @@ async def upgrade_scope(
                 user_id=user.sub,
                 tool_name=scope,  # Assuming scope name = tool name
                 required_scope=scope,
-                justification=justification
+                justification=justification,
+                resource_uri=resource_uri  # Pass the MCP server URI
             )
             approval_request_ids.append(approval_request.request_id)
         
@@ -165,9 +174,10 @@ async def upgrade_scope(
                 logger.warning(f"⚠️ Failed to decode current MCP token: {e}")
                 current_scopes = []
         else:
-            # Fall back to auth session token scopes (usually empty)
-            current_scopes = user.scope.split() if user.scope else []
-            logger.info(f"🔍 Using auth session scopes: {current_scopes}")
+            # IMPORTANT: Use user's total approved scopes from database, not just session token scopes
+            # This ensures all previously approved scopes are included in the new token
+            current_scopes = auth_db.get_user_all_scopes(user.email)
+            logger.info(f"🔍 Using user's approved scopes from database: {current_scopes}")
         
         # Combine current scopes with auto-approved scopes
         new_scopes = list(set(current_scopes + auto_approved))
@@ -182,27 +192,21 @@ async def upgrade_scope(
         
             # Generate new token with updated scopes
             # Get the audience from the request data (for MCP tokens)
-            audience = data.get('resource', 'http://localhost:8001')
-            new_token = generate_token(user, new_scopes, audience)
-            logger.info(f"✅ Generated new token for {user.email} with scopes: {new_scopes}, audience: {audience}")
+            audience = data.get('resource')  # Remove hardcoded fallback
+            if audience:
+                new_token = generate_token(user, new_scopes, audience)
+                logger.info(f"✅ Generated new token for {user.email} with scopes: {new_scopes}, audience: {audience}")
+            else:
+                logger.warning("⚠️ No audience specified for token generation")
         
-        response = {
-            "status": "pending_admin_approval" if requires_approval else "approved",
-            "auto_approved": auto_approved,
-            "requires_approval": requires_approval,
+        return {
+            "success": True,
+            "auto_approved_scopes": auto_approved,
+            "pending_approval_scopes": requires_approval,
             "approval_request_ids": approval_request_ids,
-            "message": f"Approval requests created for scopes: {requires_approval}. Request IDs: {approval_request_ids}" if requires_approval else "All scopes auto-approved"
+            "new_token": new_token,
+            "message": f"Scope upgrade processed. {len(auto_approved)} scopes auto-approved, {len(requires_approval)} require manual approval."
         }
-        
-        # Include new token in response if scopes were auto-approved
-        if new_token:
-            response["access_token"] = new_token
-            response["token_type"] = "Bearer"
-            response["expires_in"] = 3600
-            response["scope"] = " ".join(new_scopes)
-            logger.info(f"🎫 Returning new token with scopes: {new_scopes}")
-        
-        return response
         
     except Exception as e:
         logger.error(f"❌ Scope upgrade failed: {e}")
@@ -321,27 +325,65 @@ async def get_initial_token(
     request: Request,
     user: TokenPayload = Depends(verify_user_auth)
 ):
-    """Get initial token for user"""
+    """Get initial token for MCP server access with proper approval checks"""
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     try:
         data = await request.json()
-        audience = data.get('audience', 'llama-stack')
-        scopes = data.get('scopes', [])
+        resource = data.get('resource')  # MCP server URI
+        requested_scopes = data.get('scopes', [])  # Requested scopes
         
-        # Generate token with requested scopes
-        token = generate_token(user, scopes, audience)
+        if not resource:
+            raise HTTPException(status_code=400, detail="Resource URI is required")
+        
+        logger.info(f"🎫 Initial token request from {user.email} for resource: {resource}, scopes: {requested_scopes}")
+        
+        # SECURITY FIX: Evaluate approval policy for requested scopes
+        if requested_scopes:
+            policy_result = evaluate_approval_policy(user.email, requested_scopes)
+            auto_approved = policy_result['auto_approved']
+            requires_approval = policy_result['requires_approval']
+            
+            logger.info(f"📋 Policy result: auto_approved={auto_approved}, requires_approval={requires_approval}")
+            
+            if requires_approval:
+                # Cannot generate initial token with scopes that require approval
+                logger.warning(f"⚠️ Initial token request denied - scopes require approval: {requires_approval}")
+                raise HTTPException(
+                    status_code=403, 
+                    detail={
+                        "error": "scope_approval_required",
+                        "message": f"Scopes require admin approval: {', '.join(requires_approval)}",
+                        "auto_approved_scopes": auto_approved,
+                        "requires_approval_scopes": requires_approval,
+                        "resource": resource
+                    }
+                )
+            
+            # Use only auto-approved scopes
+            token_scopes = auto_approved
+        else:
+            # No scopes requested - generate empty token
+            token_scopes = []
+        
+        # Generate token for the specific resource with only approved scopes
+        token = generate_token(user, token_scopes, audience=resource)
+        
+        logger.info(f"✅ Generated initial token for {user.email} with approved scopes: {token_scopes}")
         
         return {
-            "access_token": token,
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "scope": " ".join(scopes)
+            "success": True,
+            "token": token,
+            "scopes": token_scopes,
+            "resource": resource,
+            "message": f"Initial token generated with approved scopes: {', '.join(token_scopes) if token_scopes else 'none'}"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Failed to generate initial token: {e}")
+        logger.error(f"❌ Initial token generation failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/check-token-update")
@@ -358,6 +400,7 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
             # No updates needed
             return {
                 "update_needed": False,
+                "has_updates": False,
                 "current_scopes": user.scope.split() if user.scope else [],
                 "message": "Token is up to date"
             }
@@ -366,8 +409,10 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
         new_scopes = pending_update['new_scopes']
         approval_type = pending_update['approval_type']
         
-        # Get user's current scopes from their existing token
-        current_scopes = user.scope.split() if user.scope else []
+        # IMPORTANT: Get user's total approved scopes from database, not just current token scopes
+        # This ensures scopes are additive - new approvals add to existing ones
+        current_scopes = auth_db.get_user_all_scopes(user.email)
+        logger.info(f"🔍 User {user.email} current approved scopes from database: {current_scopes}")
         
         # Add the newly approved scopes to current scopes
         updated_scopes = current_scopes.copy()
@@ -375,27 +420,63 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
             if scope not in updated_scopes:
                 updated_scopes.append(scope)
         
-        # Generate new token with updated scopes
-        from utils.jwt_utils import generate_token
-        new_token = generate_token(user, updated_scopes, audience="http://localhost:8001")
+        logger.info(f"🔍 Final updated scopes for {user.email}: current={current_scopes} + new={new_scopes} = total={updated_scopes}")
         
-        # Clear the pending update since we're generating the token
+        # Generate new tokens with updated scopes
+        from utils.jwt_utils import generate_token
+        
+        # IMPORTANT: Separate scopes by audience
+        # Llama Stack tokens should only have general user permissions, not tool-specific scopes
+        # MCP tokens should have the tool-specific scopes
+        
+        # Define what scopes are appropriate for Llama Stack vs MCP servers
+        # Llama Stack scopes: general user permissions, admin, etc.
+        # MCP scopes: tool names like execute_command, list_files, etc.
+        
+        # For now, assume tool-specific scopes (that match common tool names) are MCP scopes
+        common_tool_scopes = {'execute_command', 'list_files', 'read_file', 'write_file', 'delete_file', 'search_files', 'get_system_info'}
+        
+        # Separate scopes
+        llama_stack_scopes = [scope for scope in updated_scopes if scope not in common_tool_scopes]
+        mcp_scopes = [scope for scope in updated_scopes if scope in common_tool_scopes]
+        
+        logger.info(f"🔍 Separated scopes - Llama Stack: {llama_stack_scopes}, MCP: {mcp_scopes}")
+        
+        # For token refresh, generate a Llama Stack token for the session with only appropriate scopes
+        llama_stack_audience = "http://localhost:8321"
+        session_token = generate_token(user, llama_stack_scopes, audience=llama_stack_audience)
+        
+        # Also generate MCP token for the requesting MCP server (if specified in approval)
+        mcp_audience = pending_update.get('audience')
+        mcp_token = None
+        if mcp_audience and mcp_scopes:
+            mcp_token = generate_token(user, mcp_scopes, audience=mcp_audience)
+            logger.info(f"🎫 Generated MCP token for {user.email} with audience: {mcp_audience}")
+        
+        # Clear the pending update since we're generating the tokens
         auth_db.clear_pending_token_update(user.email)
         
-        logger.info(f"🎫 Generated updated token for {user.email} with scopes: {updated_scopes}")
+        logger.info(f"🎫 Generated updated tokens for {user.email} with scopes: {updated_scopes}")
         
-        return {
+        response_data = {
             "update_needed": True,
             "has_updates": True,
             "new_scopes": new_scopes,
             "total_scopes": updated_scopes,
-            "new_token": new_token,
-            "audience": "http://localhost:8001",
+            "new_token": session_token,  # This is the Llama Stack session token
+            "audience": llama_stack_audience,
             "approval_type": approval_type,
             "has_manual_approvals": approval_type == 'manual',
             "has_auto_approvals": approval_type == 'auto',
             "message": f"Token updated with new scopes: {', '.join(new_scopes)}"
         }
+        
+        # Add MCP token info if available
+        if mcp_token and mcp_audience:
+            response_data["mcp_token"] = mcp_token
+            response_data["mcp_audience"] = mcp_audience
+        
+        return response_data
         
     except Exception as e:
         logger.error(f"❌ Failed to check token update: {e}")

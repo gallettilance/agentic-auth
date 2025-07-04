@@ -101,7 +101,42 @@ async def request_scope_upgrade(required_scope: str, user_token: str, auth_cooki
             )
             
             if response.status_code == 200:
-                return response.json()
+                result = response.json()
+                
+                # Check if there are pending approvals
+                pending_scopes = result.get('pending_approval_scopes', [])
+                auto_approved = result.get('auto_approved_scopes', [])
+                new_token = result.get('new_token')
+                
+                if pending_scopes:
+                    logger.info(f"🔔 Scope upgrade requires admin approval: {pending_scopes}")
+                    return {
+                        'success': True,
+                        'status': 'pending_admin_approval',
+                        'pending_scopes': pending_scopes,
+                        'auto_approved_scopes': auto_approved,
+                        'approval_request_ids': result.get('approval_request_ids', []),
+                        'new_token': new_token,
+                        'message': f"Approval request submitted for scopes: {', '.join(pending_scopes)}"
+                    }
+                elif auto_approved:
+                    logger.info(f"✅ Scope upgrade auto-approved: {auto_approved}")
+                    return {
+                        'success': True,
+                        'status': 'approved',
+                        'auto_approved_scopes': auto_approved,
+                        'token': new_token,
+                        'access_token': new_token,  # Backward compatibility
+                        'message': f"Scopes auto-approved: {', '.join(auto_approved)}"
+                    }
+                else:
+                    logger.warning(f"⚠️ Scope upgrade returned success but no scopes processed")
+                    return {
+                        'success': True,
+                        'status': 'no_change',
+                        'message': 'No scope changes needed'
+                    }
+                
             else:
                 logger.error(f"❌ Scope upgrade failed: {response.status_code} - {response.text}")
                 return {
@@ -123,7 +158,7 @@ async def request_mcp_token(required_scope: str, mcp_server_url: str, current_to
             auth_server_url = AUTH_SERVER_URL
         
         token_data = {
-            "audience": mcp_server_url,
+            "resource": mcp_server_url,
             "scopes": [required_scope]
         }
         
@@ -139,7 +174,18 @@ async def request_mcp_token(required_scope: str, mcp_server_url: str, current_to
             )
             
             if response.status_code == 200:
-                return response.json()
+                response_data = response.json()
+                if response_data.get('success') and response_data.get('token'):
+                    return {
+                        'access_token': response_data['token'],
+                        'token_type': 'Bearer',
+                        'expires_in': 3600,
+                        'scope': ' '.join(response_data.get('scopes', [])),
+                        'resource': response_data.get('resource'),
+                        'success': True
+                    }
+                else:
+                    return response_data
             else:
                 logger.error(f"❌ MCP token request failed: {response.status_code} - {response.text}")
                 return {

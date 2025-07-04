@@ -1,0 +1,50 @@
+sequenceDiagram
+    participant User
+    participant ChatApp as Chat App
+    participant LlamaStack as Llama Stack
+    participant MCPServer as MCP Server
+    participant AuthServer as Auth Server
+    participant Admin
+
+    Note over User, Admin: Initial OAuth Flow
+    User->>ChatApp: Access chat interface
+    ChatApp->>User: Redirect to OAuth
+    User->>AuthServer: Complete OAuth login
+    AuthServer->>ChatApp: Return session + Llama Stack token
+    ChatApp->>User: Show chat interface
+
+    Note over User, Admin: First Tool Call Attempt
+    User->>ChatApp: Send message requiring tool
+    ChatApp->>LlamaStack: Forward message with token
+    LlamaStack->>MCPServer: Call tool (no MCP token)
+    MCPServer-->>LlamaStack: 401 Unauthorized (no token)
+    LlamaStack-->>ChatApp: AuthorizationError with MCP URI
+    
+    Note over ChatApp: MCP Server Discovery
+    ChatApp->>MCPServer: GET /.well-known/oauth-protected-resource
+    MCPServer->>ChatApp: Return auth server URI
+    
+    Note over ChatApp: Dynamic Registration & Initial Token
+    ChatApp->>AuthServer: Register MCP server dynamically
+    AuthServer->>ChatApp: Registration confirmed
+    ChatApp->>AuthServer: Request token (empty scopes)
+    AuthServer->>ChatApp: Return MCP token (no scopes)
+    
+    Note over User, Admin: Second Tool Call Attempt
+    ChatApp->>LlamaStack: Retry with MCP token
+    LlamaStack->>MCPServer: Call tool with MCP token
+    MCPServer-->>LlamaStack: 403 Insufficient Scope (tool_name required)
+    LlamaStack-->>ChatApp: InsufficientScopeError with scope details
+    
+    Note over ChatApp, Admin: Scope Approval Flow
+    ChatApp->>AuthServer: Request scope approval (tool_name)
+    AuthServer->>Admin: Notify pending approval
+    Admin->>AuthServer: Approve scope request
+    AuthServer->>ChatApp: Token updated with new scope
+    
+    Note over User, Admin: Successful Tool Execution
+    ChatApp->>LlamaStack: Retry with updated token
+    LlamaStack->>MCPServer: Call tool with proper scope
+    MCPServer->>LlamaStack: Tool execution result
+    LlamaStack->>ChatApp: Response with tool output
+    ChatApp->>User: Display result

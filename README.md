@@ -29,7 +29,7 @@ This system provides **secure, granular access control** for AI agents interacti
                     ┌─────────────────┐    ┌─────────────────┐
                     │  Llama Stack    │    │ Admin Dashboard │
                     │  (AI Agents)    │    │   (Flask)       │
-                    │  Port 8321      │    │   Port 5002     │
+                    │  Port 8321      │    │   Port 8003     │
                     └─────────────────┘    └─────────────────┘
 ```
 
@@ -43,6 +43,12 @@ python --version
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+### **Browser Recommendation**
+🌐 **Recommended Browser: Google Chrome**
+- OAuth flows are optimized for Chrome
+- Token debugging features work best in Chrome
+- Cookie management is most reliable in Chrome
 
 ### **Environment Setup**
 ```bash
@@ -62,7 +68,7 @@ cp env.example .env
 
 # Access the applications:
 # - Chat UI: http://localhost:5001
-# - Admin Dashboard: http://localhost:5002
+# - Admin Dashboard: http://localhost:8003/dashboard
 # - Auth Server: http://localhost:8002
 ```
 
@@ -75,57 +81,39 @@ cp env.example .env
 ./cleanup_demo.sh
 ```
 
+⚠️ **Important**: `stop_demo.sh` will **force close Chrome** to clear authentication cookies. Save any important Chrome work before running this command.
+
 ## 🔄 **System Overview & Authentication Flow**
 
 ### **System Components Overview**
 ![System Overview](diagrams/system-overview.svg)
 
-### **Complete Authentication Flow**
-The following sequence diagram shows the complete flow from initial access to tool execution:
+### **OAuth and MCP Token Discovery Flow**
+The following diagram shows the streamlined OAuth authentication and MCP token discovery process:
 
-![Authentication Flow](diagrams/sequence-diagram.svg)
+![OAuth MCP Discovery Flow](diagrams/oauth-mcp-discovery-flow.svg)
 
-### **Simplified Flow Overview**
+### **How It Works**
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant ChatUI as Chat UI
-    participant AuthServer as Auth Server
-    participant LlamaStack as Llama Stack
-    participant MCP as MCP Server
-    participant Admin as Admin Dashboard
+1. **🔐 Initial Authentication**
+   - User accesses Chat UI → redirected to Google OAuth
+   - After OAuth success → user gets Llama Stack session token
+   - Session token enables basic chat functionality
 
-    Note over User,Admin: 🚀 Initial Access
-    User->>ChatUI: Access localhost:5001
-    ChatUI->>AuthServer: Check authentication
-    AuthServer-->>ChatUI: Redirect to Google OAuth
-    User->>AuthServer: Complete OAuth login
-    AuthServer-->>ChatUI: Return with session token
+2. **🔧 Tool Discovery & Authorization**
+   - AI agent attempts to use MCP tool → gets 403 (insufficient scope)
+   - System automatically requests required scope from auth server
+   - Auth server evaluates policy: auto-approve safe tools, require admin approval for risky ones
 
-    Note over User,Admin: 💬 Tool Request
-    User->>ChatUI: "List files in /tmp"
-    ChatUI->>LlamaStack: Send message to AI agent
-    LlamaStack->>MCP: Request list_files tool
-    MCP-->>LlamaStack: 403 Insufficient scope
-    LlamaStack-->>ChatUI: Authorization required
+3. **🎫 Token Exchange & Upgrade**
+   - For auto-approved scopes: immediate token upgrade
+   - For admin-required scopes: approval workflow with admin dashboard
+   - User gets both Llama Stack and MCP tokens with appropriate scopes
 
-    Note over User,Admin: 🔄 Permission Upgrade
-    ChatUI->>AuthServer: Request list_files scope
-    AuthServer->>AuthServer: Check policy → Auto-approve
-    AuthServer-->>ChatUI: New token with scope
-    ChatUI->>LlamaStack: Retry with new token
-    LlamaStack->>MCP: Call tool with valid scope
-    MCP-->>User: Success: File listing displayed
-
-    Note over User,Admin: 👑 Admin Approval (for risky tools)
-    User->>ChatUI: "Execute command: rm -rf /"
-    ChatUI->>AuthServer: Request execute_command scope
-    AuthServer->>AuthServer: Check policy → Requires admin
-    AuthServer-->>ChatUI: Approval pending
-    Admin->>AuthServer: Approve/deny request
-    AuthServer-->>ChatUI: Decision notification
-```
+4. **✅ Seamless Execution**
+   - User retries request with new permissions
+   - AI agent successfully executes tool with valid scope
+   - Future requests use cached tokens until expiration
 
 ## 📋 **Demo Walkthrough**
 
@@ -140,7 +128,7 @@ sequenceDiagram
 ### **2. Admin Approval Workflow**
 1. **Try risky command**: "Execute command: ls -la"
 2. **See approval request** created automatically
-3. **Admin reviews** in dashboard at http://localhost:5002
+3. **Admin reviews** in dashboard at http://localhost:8003/dashboard
 4. **Approve/deny** with justification
 5. **User gets notification** and can retry
 
@@ -226,7 +214,8 @@ Authentication/
 │   ├── stack/run.yml              # Llama Stack config
 │   └── auth-agent/                # Custom auth agent
 ├── diagrams/                      # Architecture diagrams
-│   ├── sequence-diagram.mmd       # Complete flow diagram
+│   ├── oauth-mcp-discovery-flow.mmd  # OAuth & MCP token flow
+│   ├── system-overview.mmd        # System components overview
 │   └── *.svg                      # Rendered diagrams
 ├── start_demo.sh                  # One-command startup
 ├── stop_demo.sh                   # Stop all services
@@ -253,7 +242,7 @@ POST /api/upgrade-scope            # Request scope upgrade
 GET  /.well-known/jwks.json        # Public keys
 ```
 
-### **Admin Dashboard (Port 5002)**
+### **Admin Dashboard (Port 8003)**
 ```
 GET  /dashboard                    # Admin interface
 GET  /api/pending-approvals        # Pending requests

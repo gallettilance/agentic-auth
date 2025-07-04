@@ -89,8 +89,6 @@ class ClientRegistrationRequest(BaseModel):
     logo_uri: Optional[str] = None
     policy_uri: Optional[str] = None
     tos_uri: Optional[str] = None
-    # MCP-specific fields
-    mcp_server_uri: Optional[str] = None  # Target MCP server for this client
     client_type: str = "confidential"  # confidential or public
 
 class ClientRegistrationResponse(BaseModel):

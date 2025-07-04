@@ -1,95 +1,62 @@
 """
-MCP (Model Context Protocol) utilities
+MCP (Model Context Protocol) utilities - Decoupled from specific MCP servers
 """
 
 import logging
 from typing import Dict, List, Any, Optional
 from models.schemas import TokenPayload
-from config.settings import MCP_SERVER_URI
 from database import auth_db
 
 logger = logging.getLogger(__name__)
 
-async def fetch_mcp_tools(user: TokenPayload) -> Dict[str, Any]:
-    """Fetch available MCP tools from the actual MCP server using proper MCP client"""
+async def get_registered_tools() -> Dict[str, Any]:
+    """
+    Get tools from the database registry instead of connecting to a specific MCP server.
+    This allows the auth server to be decoupled from any specific MCP server.
+    """
     try:
-        logger.info(f"🔍 Connecting to MCP server at {MCP_SERVER_URI}/sse via MCP client")
+        # Get all permissions from database which represent available tools
+        all_permissions = auth_db.get_all_permissions()
         
-        # Import proper MCP client libraries
-        try:
-            from mcp.client.sse import sse_client
-            from mcp import ClientSession
-            import asyncio
-        except ImportError as e:
-            logger.error(f"❌ MCP client libraries not available: {e}")
-            return await _get_fallback_tools()
+        tools_info = []
+        for permission in all_permissions:
+            tools_info.append({
+                "name": permission.scope,  # scope == tool name convention
+                "description": permission.description or f"Access to {permission.scope}",
+                "required_scope": permission.scope,
+                "risk_level": permission.risk_level.value
+            })
         
-        try:
-            # Connect to MCP server using proper SSE transport
-            async with sse_client(f"{MCP_SERVER_URI}/sse") as (read_stream, write_stream):
-                # Create MCP client session
-                async with ClientSession(read_stream, write_stream) as session:
-                    # Initialize the session
-                    await session.initialize()
-                    
-                    # List tools using proper MCP protocol
-                    tools_result = await session.list_tools()
-                    logger.info(f"✅ Got MCP tools: {tools_result}")
-                    
-                    # Extract tools from the MCP result
-                    if hasattr(tools_result, 'tools') and tools_result.tools:
-                        tools_info = []
-                        
-                        for tool in tools_result.tools:
-                            tool_name = tool.name
-                            tool_description = getattr(tool, 'description', 'No description')
-                            
-                            # Skip the public get_available_tools endpoint
-                            if tool_name != "get_available_tools":
-                                tools_info.append({
-                                    "name": tool_name,
-                                    "description": tool_description,
-                                    "required_scope": tool_name  # scope == tool name convention
-                                })
-                        
-                        logger.info(f"✅ Successfully loaded {len(tools_info)} MCP tools from server")
-                        return {"tools": tools_info}
-                    else:
-                        logger.warning(f"⚠️ No tools found in MCP response: {tools_result}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error connecting to MCP server: {e}")
-            logger.error(f"🔍 Error type: {type(e).__name__}")
-                
+        logger.info(f"✅ Loaded {len(tools_info)} tools from database registry")
+        return {"tools": tools_info}
+        
     except Exception as e:
-        logger.error(f"❌ Error in fetch_mcp_tools: {e}")
-    
-    # Fallback to static tool list
-    logger.warning("⚠️ Using fallback static tool list")
-    return await _get_fallback_tools()
+        logger.error(f"❌ Error loading tools from database: {e}")
+        # Return fallback tools if database fails
+        return await _get_fallback_tools()
 
 async def _get_fallback_tools() -> Dict[str, Any]:
-    """Fallback static tool list when MCP server is not available"""
+    """Fallback static tool list when database is not available"""
     return {
         "tools": [
-            {"name": "list_files", "description": "List files in a directory", "required_scope": "list_files"},
-            {"name": "execute_command", "description": "Execute a safe system command", "required_scope": "execute_command"},
-            {"name": "get_server_info", "description": "Get server information and authentication status", "required_scope": "get_server_info"},
-            {"name": "get_oauth_metadata", "description": "Get OAuth 2.0 Protected Resource Metadata", "required_scope": "get_oauth_metadata"},
-            {"name": "health_check", "description": "Perform a health check of the server", "required_scope": "health_check"},
-            {"name": "list_tool_scopes", "description": "List all available tools and their required scopes", "required_scope": "list_tool_scopes"},
-            {"name": "verify_domain", "description": "Verify domain ownership for MCP server registration", "required_scope": "verify_domain"}
+            {"name": "list_files", "description": "List files in a directory", "required_scope": "list_files", "risk_level": "low"},
+            {"name": "execute_command", "description": "Execute a safe system command", "required_scope": "execute_command", "risk_level": "high"},
+            {"name": "get_server_info", "description": "Get server information and authentication status", "required_scope": "get_server_info", "risk_level": "low"},
+            {"name": "get_oauth_metadata", "description": "Get OAuth 2.0 Protected Resource Metadata", "required_scope": "get_oauth_metadata", "risk_level": "low"},
+            {"name": "health_check", "description": "Perform a health check of the server", "required_scope": "health_check", "risk_level": "low"},
+            {"name": "list_tool_scopes", "description": "List all available tools and their required scopes", "required_scope": "list_tool_scopes", "risk_level": "low"},
+            {"name": "verify_domain", "description": "Verify domain ownership for MCP server registration", "required_scope": "verify_domain", "risk_level": "medium"}
         ]
     }
 
-def get_user_tool_access(user_scopes: List[str], mcp_tools: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def get_user_tool_access(user_scopes: List[str], available_tools: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Get user tool access based on actual token scopes (scope == tool name convention)"""
     tool_access = {}
     
     # Get all permissions from database
     all_permissions = {perm.scope: perm for perm in auth_db.get_all_permissions()}
     
-    for tool in mcp_tools.get("tools", []):
+    for tool in available_tools.get("tools", []):
         tool_name = tool.get("name", "unknown")
         
         # Use the required_scope from the tool definition
@@ -103,14 +70,14 @@ def get_user_tool_access(user_scopes: List[str], mcp_tools: Dict[str, Any]) -> D
         tool_access[tool_name] = {
             "has_access": has_access,
             "required_scope": required_scope,
-            "risk_level": permission_info.risk_level.value if permission_info else "low",
+            "risk_level": permission_info.risk_level.value if permission_info else tool.get("risk_level", "low"),
             "description": tool.get("description", "No description available")
         }
     
     return tool_access
 
-async def test_mcp_tool(tool_name: str, user_scopes: List[str]) -> Dict[str, Any]:
-    """Test an MCP tool (simplified implementation for demo purposes)"""
+async def validate_tool_access(tool_name: str, user_scopes: List[str]) -> Dict[str, Any]:
+    """Validate if user has access to a specific tool"""
     try:
         # Check if user has required scope
         required_scope = tool_name  # Default mapping: scope == tool name
@@ -123,17 +90,16 @@ async def test_mcp_tool(tool_name: str, user_scopes: List[str]) -> Dict[str, Any
                 'tool_name': tool_name
             }
         
-        # For testing, we'll just return a success message
-        # In a real implementation, you would call the actual MCP tool
+        # Tool access is valid
         return {
             "success": True,
             "tool_name": tool_name,
-            "result": f"✅ Tool {tool_name} test successful",
-            "message": f"Tool {tool_name} executed successfully with scope {required_scope}"
+            "result": f"✅ User has access to {tool_name}",
+            "message": f"Access granted to {tool_name} with scope {required_scope}"
         }
         
     except Exception as e:
-        logger.error(f"❌ Tool test failed for {tool_name}: {e}")
+        logger.error(f"❌ Tool access validation failed for {tool_name}: {e}")
         return {
             'success': False,
             'error': str(e),

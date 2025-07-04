@@ -89,7 +89,7 @@ def check_auth_server_session():
         logger.error(f"Error checking auth server session: {e}")
         return None
 
-async def request_llama_stack_token(auth_cookies: dict = {}, auth_server_url: str = None) -> dict:
+async def request_llama_stack_token(auth_cookies: dict = {}, auth_server_url: str | None = None) -> dict:
     """Request a Llama Stack token from auth server"""
     try:
         import httpx
@@ -101,7 +101,7 @@ async def request_llama_stack_token(auth_cookies: dict = {}, auth_server_url: st
             response = await client.post(
                 f"{auth_server_url}/api/initial-token",
                 json={
-                    "audience": LLAMA_STACK_URL,
+                    "resource": LLAMA_STACK_URL,  # Changed from "audience" to "resource"
                     "scopes": []  # Start with empty scopes
                 },
                 cookies=auth_cookies,
@@ -225,7 +225,7 @@ def callback():
                     llama_response = client.post(
                         f"{AUTH_SERVER_URL}/api/initial-token",
                         json={
-                            "audience": LLAMA_STACK_URL,
+                            "resource": LLAMA_STACK_URL,
                             "scopes": []
                         },
                         cookies={'auth_session': auth_session_token},
@@ -234,7 +234,8 @@ def callback():
                     
                     if llama_response.status_code == 200:
                         llama_token_data = llama_response.json()
-                        llama_stack_token = llama_token_data.get('access_token')
+                        # Handle new response format
+                        llama_stack_token = llama_token_data.get('token')  # Changed from 'access_token' to 'token'
                         
                         if llama_stack_token:
                             # Set cookies and redirect to chat
@@ -257,6 +258,12 @@ def callback():
                             )
                             logger.info("✅ OAuth flow completed successfully")
                             return response
+                        else:
+                            logger.error(f"❌ No token in response: {llama_token_data}")
+                    else:
+                        logger.error(f"❌ Failed to get Llama Stack token: {llama_response.status_code} - {llama_response.text}")
+                else:
+                    logger.error("❌ No auth session token received")
             
             logger.error(f"❌ OAuth token exchange failed: {response.status_code}")
             
@@ -327,8 +334,9 @@ def store_mcp_token_for_user(user_email: str, server_url: str, token: str):
         logger.info(f"✅ Stored MCP token in session for {user_email} -> {base_server_url}")
         
         # Also store the latest MCP token in a cookie for admin dashboard access
-        # We store the token for the primary MCP server (localhost:8001)
-        if base_server_url == 'http://localhost:8001':
+        # Note: This is only done for the primary MCP server configured in environment
+        primary_mcp_server = os.getenv('MCP_SERVER_URL')
+        if primary_mcp_server and base_server_url == primary_mcp_server:
             from flask import make_response, g
             
             # Check if we're in a request context that can set cookies
