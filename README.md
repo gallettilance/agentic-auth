@@ -58,7 +58,7 @@ cp env.example .env
 # Edit .env file with your settings:
 # - ADMIN_EMAIL (required)
 # - OPENAI_API_KEY (required for AI agents)
-# - GOOGLE_CLIENT_ID/SECRET (optional - demo login available)
+# - GOOGLE_CLIENT_ID/SECRET (required for Google OAuth)
 ```
 
 ### **Start the System**
@@ -82,6 +82,100 @@ cp env.example .env
 ```
 
 ⚠️ **Important**: `stop_demo.sh` will **force close Chrome** to clear authentication cookies. Save any important Chrome work before running this command.
+
+## 🔐 **Google OAuth Setup**
+
+Before running the demo, you need to set up Google OAuth credentials. Follow these steps:
+
+### **1. Create Google Cloud Project**
+
+1. **Go to Google Cloud Console**: https://console.cloud.google.com/
+2. **Create a new project** or select an existing one
+3. **Enable the Google+ API**:
+   - Go to "APIs & Services" > "Library"
+   - Search for "Google+ API" 
+   - Click "Enable"
+
+### **2. Configure OAuth Consent Screen**
+
+1. **Go to "APIs & Services" > "OAuth consent screen"**
+2. **Choose "External" user type** (unless you have a Google Workspace)
+3. **Fill in required fields**:
+   - App name: `Authentication Demo`
+   - User support email: Your email
+   - Developer contact email: Your email
+4. **Add scopes** (click "Add or Remove Scopes"):
+   - `openid`
+   - `email`
+   - `profile`
+5. **Add test users** (for External apps):
+   - Add your email address and any other emails you want to test with
+6. **Save and continue** through all steps
+
+### **3. Create OAuth Credentials**
+
+1. **Go to "APIs & Services" > "Credentials"**
+2. **Click "Create Credentials" > "OAuth 2.0 Client ID"**
+3. **Choose "Web application"**
+4. **Configure the client**:
+   - **Name**: `Authentication Demo Client`
+   - **Authorized JavaScript origins**:
+     ```
+     http://localhost:5001
+     http://localhost:8002
+     http://localhost:8003
+     ```
+   - **Authorized redirect URIs**:
+     ```
+     http://localhost:8002/auth/callback
+     http://localhost:5001/callback
+     http://localhost:8003/callback
+     ```
+5. **Click "Create"**
+6. **Copy the Client ID and Client Secret** - you'll need these for your `.env` file
+
+### **4. Update Environment Variables**
+
+Add your Google OAuth credentials to your `.env` file:
+
+```bash
+# Required Google OAuth credentials
+GOOGLE_CLIENT_ID="your-client-id-here.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="your-client-secret-here"
+
+# Other required variables
+ADMIN_EMAIL="your-admin@example.com"
+OPENAI_API_KEY="your-openai-api-key"
+```
+
+### **5. Test Your Setup**
+
+1. **Start the demo**: `./start_demo.sh`
+2. **Visit**: http://localhost:5001
+3. **Click login** - you should be redirected to Google
+4. **Sign in** with a test user email you added
+5. **Grant permissions** to the app
+6. **You should be redirected back** to the chat interface
+
+### **🚨 Common OAuth Issues**
+
+**"Error 400: redirect_uri_mismatch"**
+```bash
+# Check your redirect URIs in Google Cloud Console
+# Make sure you have: http://localhost:8002/auth/callback
+```
+
+**"Error 403: access_denied"**
+```bash
+# Add your email as a test user in OAuth consent screen
+# Or publish your app (not recommended for development)
+```
+
+**"Error 401: invalid_client"**
+```bash
+# Check your GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env
+# Make sure there are no extra spaces or quotes
+```
 
 ## 🔄 **System Overview & Authentication Flow**
 
@@ -119,7 +213,7 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 
 ### **1. First-Time User Experience**
 1. **Access** http://localhost:5001
-2. **Login** with Google OAuth (or demo login)
+2. **Login** with Google OAuth
 3. **Start with no permissions** - secure by default
 4. **Try a command**: "List files in /tmp"
 5. **See auto-approval** for safe operations
@@ -145,8 +239,6 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 # Required
 ADMIN_EMAIL="your-admin@example.com"
 OPENAI_API_KEY="your-openai-api-key"
-
-# Optional (demo login available)
 GOOGLE_CLIENT_ID="your-google-client-id"
 GOOGLE_CLIENT_SECRET="your-google-client-secret"
 
@@ -306,10 +398,13 @@ tail -f logs/auth-server.log
 # (Use links in chat UI token dashboard)
 ```
 
-**Google OAuth issues:**
+**Google OAuth setup required:**
 ```bash
-# Use demo login instead
-open http://localhost:8002/auth/demo-login
+# Check Google OAuth credentials in .env
+cat .env | grep GOOGLE_
+
+# Verify auth server is running
+curl http://localhost:8002/health
 ```
 
 ## 🤝 **Contributing**
