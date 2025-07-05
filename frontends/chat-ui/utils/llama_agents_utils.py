@@ -39,7 +39,10 @@ Available MCP tools are automatically provided through the authenticated connect
 
 # Global variables for agent management
 llama_client = None
-user_agents = {}  # Dictionary to store per-user agents: {user_email: {'agent': agent, 'session_id': session_id}}
+user_agents = {}  # Dictionary to store per-user agents: {user_email: {'agent': agent, 'created_at': timestamp}}
+
+# Global cache for user sessions - simplified to store only session IDs per user
+user_sessions = {}  # {user_email: session_id}
 
 def get_or_create_user_agent(user_email: str, bearer_token: str):
     """Get or create a user-specific Llama Stack agent with per-user isolation"""
@@ -57,25 +60,23 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
             )
             logger.info(f"✅ Initialized Llama Stack client with authentication: {'Yes' if api_key else 'No'}")
         
-        # Check if user already has an agent
+        # Check if user already has an agent in memory
         if user_email in user_agents:
             user_data = user_agents[user_email]
             agent = user_data['agent']
-            session_id = user_data['session_id']
-            
-            logger.info(f"🔄 Reusing existing agent for {user_email} with session: {session_id}")
-            return agent, session_id
+            logger.info(f"🔄 Reusing existing agent for {user_email}")
+            return agent
         
         # Get available models
         models = llama_client.models.list()
         if not models:
             logger.error("❌ No models available")
-            return None, None
+            return None
         
         model_id = models[0].identifier
         logger.info(f"🤖 Using model: {model_id}")
         
-        # Create user-specific agent
+        # Create new agent for this user
         agent = Agent(
             client=llama_client,
             tools=["mcp::mcp-auth"],  # MCP tool group from run.yml
@@ -84,39 +85,13 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
             enable_session_persistence=True,
         )
         
-        # Check if user has an existing session ID in Flask session (only if in request context)
-        existing_session_id = None
-        try:
-            existing_session_id = session.get('llama_session_id')
-            logger.info(f"🔄 Found existing session ID for {user_email}: {existing_session_id}")
-        except RuntimeError:
-            # Not in request context, skip session access
-            logger.info(f"🔄 Not in request context, will create new session for {user_email}")
-        
-        if existing_session_id:
-            session_id = existing_session_id
-            logger.info(f"✅ Reusing session: {existing_session_id}")
-        else:
-            # Create new session with user-specific name
-            session_name = f"chat-{user_email}-{int(time.time())}"
-            session_id = agent.create_session(session_name)
-            
-            # Store session ID in Flask session for persistence (only if in request context)
-            try:
-                session['llama_session_id'] = session_id
-                session.permanent = True  # Make session persistent
-                logger.info(f"✅ Stored session ID in Flask session")
-            except RuntimeError:
-                # Not in request context, skip session storage
-                logger.info(f"🔄 Not in request context, session ID not stored in Flask session")
-            
-            logger.info(f"✅ Created new session for {user_email}: {session_id}")
-        
-        # Store user agent and session
+        # Store user agent for reuse
         user_agents[user_email] = {
             'agent': agent,
-            'session_id': session_id
+            'created_at': time.time()
         }
+        
+        logger.info(f"✅ Created new agent for {user_email}")
         
         # Log token status
         if bearer_token and bearer_token != "NO_TOKEN_YET":
@@ -124,13 +99,99 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         else:
             logger.info(f"✅ Agent ready for {user_email} - no token yet (will be created on-demand)")
             
-        return agent, session_id
+        return agent
         
     except Exception as e:
         logger.error(f"❌ Failed to get/create agent for {user_email}: {e}")
         import traceback
         traceback.print_exc()
+        return None
+
+def get_or_create_session_for_user(user_email: str, bearer_token: str, conversation_id: str | None = None):
+    """Get or create a session for a user's conversation - optimized version"""
+    
+    try:
+        logger.info(f"🔄 get_or_create_session_for_user called for {user_email}")
+        
+        # Get the user's agent
+        agent = get_or_create_user_agent(user_email, bearer_token)
+        if not agent:
+            logger.error(f"❌ Failed to get agent for {user_email}")
+            return None, None
+        
+        # For now, we only support one session per user (conversation_id is ignored)
+        # This simplifies the session management significantly
+        existing_session_id = user_sessions.get(user_email)
+        
+        if existing_session_id:
+            logger.info(f"🔍 Found cached session ID for {user_email}: {existing_session_id}")
+            return agent, existing_session_id
+        
+        # Try to get session ID from Flask session if in request context
+        try:
+            existing_session_id = session.get('llama_session_id')
+            if existing_session_id:
+                logger.info(f"🔍 Found Flask session ID for {user_email}: {existing_session_id}")
+                # Store in cache for future use
+                user_sessions[user_email] = existing_session_id
+                return agent, existing_session_id
+        except RuntimeError:
+            # Not in request context, skip Flask session access
+            logger.info(f"🔄 Not in request context, will create new session")
+        
+        # Create new session
+        session_name = f"chat-{user_email}-{int(time.time())}"
+        logger.info(f"🔄 Creating new session with name: {session_name}")
+        
+        session_id = agent.create_session(session_name)
+        
+        if not session_id:
+            logger.error(f"❌ Failed to create session for {user_email}")
+            return None, None
+        
+        logger.info(f"✅ Created new session ID: {session_id}")
+        
+        # Store session ID in cache
+        user_sessions[user_email] = session_id
+        logger.info(f"✅ Stored session ID in cache: {session_id}")
+        
+        # Store in Flask session if in request context
+        try:
+            session['llama_session_id'] = session_id
+            session.permanent = True  # Make session persistent
+            logger.info(f"✅ Stored session ID in Flask session: {session_id}")
+        except RuntimeError:
+            # Not in request context, cache storage is sufficient
+            logger.info(f"🔄 Not in request context, session ID stored in cache only")
+        
+        logger.info(f"✅ Created new session for {user_email}: {session_id}")
+        return agent, session_id
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get/create session for {user_email}: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
+
+def clear_user_session(user_email: str):
+    """Clear a user's session from both cache and Flask session"""
+    try:
+        # Remove from session cache
+        if user_email in user_sessions:
+            del user_sessions[user_email]
+            logger.info(f"🗑️ Removed session from cache for {user_email}")
+        
+        # Clear from Flask session if in request context
+        try:
+            if 'llama_session_id' in session:
+                del session['llama_session_id']
+                logger.info(f"🗑️ Cleared llama_session_id from Flask session")
+        except RuntimeError:
+            # Not in request context, cache clearing is sufficient
+            logger.info(f"🔄 Not in request context, cleared cache only")
+            
+    except Exception as e:
+        logger.error(f"❌ Error clearing session for {user_email}: {e}")
 
 def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str, mcp_tokens: dict = {}) -> dict:
     """Send message to the user's specific Llama Stack agent"""
@@ -139,7 +200,7 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
         logger.info(f"🤖 Sending message to agent for {user_email}: {message}")
         
         # Get or create user-specific agent
-        agent, agent_session_id = get_or_create_user_agent(user_email, bearer_token)
+        agent, agent_session_id = get_or_create_session_for_user(user_email, bearer_token)
         
         if not agent or not agent_session_id:
             return {

@@ -7,13 +7,22 @@ from flask import Blueprint, request, jsonify, session, Response
 import logging
 import secrets
 from datetime import datetime
+import os
+import json
+import sqlite3
+import time
 
 # Import from our utility modules using absolute imports
 from utils.auth_utils import check_auth_server_session_direct, is_authorization_error, extract_authorization_error_details
 from utils.streaming_utils import stream_agent_response_with_auth_detection
-from utils.llama_agents_utils import send_message_to_llama_stack, get_or_create_user_agent
+from utils.llama_agents_utils import send_message_to_llama_stack, get_or_create_user_agent, get_or_create_session_for_user
+from utils.mcp_tokens_utils import get_mcp_tokens_for_user_direct
 
+# Configure logging
 logger = logging.getLogger(__name__)
+
+# Global variable for kvstore database path (in project root)
+KVSTORE_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', '..', 'kvstore.db')
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -144,11 +153,11 @@ def get_chat_history():
     try:
         # Check authentication
         if not session.get('authenticated'):
+            logger.warning("❌ Chat history request: Not authenticated")
             return jsonify({'error': 'Not authenticated'}), 401
         
         user_email = session.get('user_email')
         bearer_token = session.get('bearer_token')
-        llama_session_id = session.get('llama_session_id')
         
         if not user_email:
             return jsonify({'error': 'User email not found in session'}), 400
@@ -156,89 +165,177 @@ def get_chat_history():
         if not bearer_token:
             return jsonify({'error': 'Bearer token not found in session'}), 400
         
-        if not llama_session_id:
-            # No session ID means no chat history yet
-            return jsonify({
-                'status': 'success',
-                'messages': [],
-                'message': 'No chat history - new session'
-            })
+        logger.info(f"🔍 Chat history request for {user_email}")
+        logger.info(f"🔍 Bearer token present: {bool(bearer_token)}")
         
-        # Get agent and retrieve session messages
-        agent, session_id = get_or_create_user_agent(user_email, bearer_token)
+        # Get agent and session ID (this will check cache first, then Flask session)
+        logger.info(f"🔄 Getting agent and session for {user_email}")
+        agent, session_id = get_or_create_session_for_user(user_email, bearer_token)
         
-        if not agent or session_id != llama_session_id:
-            logger.warning(f"⚠️ Session mismatch or agent not available for {user_email}")
+        logger.info(f"🔍 Agent created: {bool(agent)}")
+        logger.info(f"🔍 Session ID returned: {session_id}")
+        
+        if not agent or not session_id:
+            logger.warning(f"⚠️ Could not get agent/session for {user_email}")
             return jsonify({
                 'status': 'success',
                 'messages': [],
                 'message': 'Session not available'
             })
         
-        # Get session messages from Llama Stack
+        # Query Llama Stack's kvstore database directly for turn data
         try:
-            # Use the agent's session to get messages
-            session_messages = agent.sessions.get(session_id=session_id)
+            logger.info(f"📚 Attempting to retrieve session messages from kvstore database")
             
-            if hasattr(session_messages, 'turns') and session_messages.turns:
-                # Convert Llama Stack turns to our chat format
-                messages = []
-                for turn in session_messages.turns:
-                    # Each turn has input_messages and output_message
-                    if hasattr(turn, 'input_messages'):
-                        for msg in turn.input_messages:
-                            if hasattr(msg, 'content') and hasattr(msg, 'role'):
-                                messages.append({
-                                    'type': msg.role,  # 'user' or 'assistant'
-                                    'content': msg.content,
-                                    'timestamp': getattr(msg, 'timestamp', None),
-                                    'metadata': {}
-                                })
-                    
-                    if hasattr(turn, 'output_message') and turn.output_message:
-                        msg = turn.output_message
-                        if hasattr(msg, 'content'):
-                            # Extract tool calls and other metadata if available
-                            metadata = {}
-                            if hasattr(turn, 'tool_calls') and turn.tool_calls:
-                                metadata['tool_calls'] = [
-                                    {
-                                        'tool_name': tc.tool_name,
-                                        'arguments': tc.arguments if hasattr(tc, 'arguments') else {}
-                                    }
-                                    for tc in turn.tool_calls
-                                ]
-                            
-                            messages.append({
-                                'type': 'assistant',
-                                'content': msg.content,
-                                'timestamp': getattr(msg, 'timestamp', None),
-                                'metadata': metadata
-                            })
-                
-                logger.info(f"✅ Retrieved {len(messages)} messages from session {session_id}")
-                return jsonify({
-                    'status': 'success',
-                    'messages': messages,
-                    'session_id': session_id
-                })
-            else:
+            # Connect to Llama Stack's kvstore database
+            db_path = KVSTORE_DB_PATH
+            if not os.path.exists(db_path):
+                logger.warning(f"⚠️ kvstore.db not found at {db_path}")
                 return jsonify({
                     'status': 'success',
                     'messages': [],
-                    'message': 'No messages in session'
+                    'message': 'No chat history database found'
                 })
+            
+            logger.info(f"🔍 Using kvstore database at: {db_path}")
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Find all turn keys for this session
+            session_pattern = f"session:{agent.agent_id}:{session_id}:%"
+            logger.info(f"🔍 Searching for session pattern: {session_pattern}")
+            
+            cursor.execute("""
+                SELECT key, value FROM kvstore 
+                WHERE key LIKE ? AND key NOT LIKE '%num_infer_iters_in_turn%'
+            """, (session_pattern,))
+            
+            turn_data = cursor.fetchall()
+            conn.close()
+            
+            logger.info(f"🔍 Found {len(turn_data)} turn records in database")
+            
+            # Convert turn data to our message format and collect with timestamps for sorting
+            turns_with_timestamps = []
+            
+            for key, value_str in turn_data:
+                try:
+                    turn_json = json.loads(value_str)
+                    # Get the earliest timestamp from steps for sorting
+                    earliest_timestamp = None
+                    steps = turn_json.get('steps', [])
+                    for step in steps:
+                        if step.get('started_at'):
+                            if not earliest_timestamp or step.get('started_at') < earliest_timestamp:
+                                earliest_timestamp = step.get('started_at')
+                    
+                    turns_with_timestamps.append({
+                        'key': key,
+                        'turn_json': turn_json,
+                        'timestamp': earliest_timestamp or '1900-01-01T00:00:00Z'  # Fallback for sorting
+                    })
+                except Exception as parse_error:
+                    logger.warning(f"Failed to parse turn data from key {key}: {parse_error}")
+                    continue
+            
+            # Sort turns by timestamp (oldest first)
+            turns_with_timestamps.sort(key=lambda x: x['timestamp'])
+            
+            # Convert sorted turns to message format
+            messages = []
+            
+            for turn_data in turns_with_timestamps:
+                turn_json = turn_data['turn_json']
+                try:
+                    turn_id = turn_json.get('turn_id', 'unknown')
+                    
+                    # Add user messages
+                    input_messages = turn_json.get('input_messages', [])
+                    for input_msg in input_messages:
+                        content = input_msg.get('content', '')
+                        
+                        messages.append({
+                            'id': f"turn_{turn_id}_input",
+                            'type': 'user',
+                            'content': content,
+                            'timestamp': None,  # Input messages don't have timestamps in kvstore
+                            'metadata': {}
+                        })
+                    
+                    # Add assistant response from steps
+                    steps = turn_json.get('steps', [])
+                    assistant_content = ""
+                    tool_calls_info = []
+                    latest_timestamp = None
+                    
+                    for step in steps:
+                        # Get timestamp from step
+                        if step.get('completed_at'):
+                            latest_timestamp = step.get('completed_at')
+                        
+                        # Check for model response
+                        model_response = step.get('model_response', {})
+                        if model_response:
+                            # Get content from model response
+                            step_content = model_response.get('content', '')
+                            if step_content:
+                                assistant_content += step_content
+                            
+                            # Get tool calls from model response
+                            tool_calls = model_response.get('tool_calls', [])
+                            for tool_call in tool_calls:
+                                tool_call_info = {
+                                    'tool_name': tool_call.get('tool_name', 'unknown'),
+                                    'arguments': tool_call.get('arguments', {}),
+                                    'call_id': tool_call.get('call_id')
+                                }
+                                tool_calls_info.append(tool_call_info)
+                        
+                        # Check for tool response content
+                        tool_response = step.get('tool_response')
+                        if tool_response and isinstance(tool_response, dict):
+                            tool_content = tool_response.get('content', '')
+                            if tool_content and isinstance(tool_content, str):
+                                assistant_content += f"\n{tool_content}"
+                    
+                    # Add assistant message if we have content
+                    if assistant_content or tool_calls_info:
+                        messages.append({
+                            'id': f"turn_{turn_id}_output",
+                            'type': 'assistant',
+                            'content': assistant_content.strip(),
+                            'timestamp': latest_timestamp,
+                            'metadata': {
+                                'tool_calls': tool_calls_info
+                            }
+                        })
+                        
+                except Exception as turn_error:
+                    logger.warning(f"Failed to process turn data from key {turn_data['key']}: {turn_error}")
+                    continue
+            
+            logger.info(f"✅ Retrieved {len(messages)} messages from session {session_id}")
+            return jsonify({
+                'status': 'success',
+                'messages': messages,
+                'session_id': session_id
+            })
                 
-        except Exception as session_error:
-            logger.error(f"❌ Error retrieving session messages: {session_error}")
+        except Exception as db_error:
+            logger.error(f"❌ Error querying kvstore database: {db_error}")
+            import traceback
+            traceback.print_exc()
             return jsonify({
                 'status': 'success',
                 'messages': [],
-                'message': f'Could not retrieve session: {str(session_error)}'
+                'message': f'Could not retrieve session: {str(db_error)}'
             })
         
     except Exception as e:
         logger.error(f"❌ Error getting chat history: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/clear-chat-history', methods=['POST'])
@@ -249,12 +346,78 @@ def clear_chat_history():
         if not session.get('authenticated'):
             return jsonify({'error': 'Not authenticated'}), 401
         
-        # TODO: Implement chat history clearing in Llama Stack
-        return jsonify({
-            'success': True,
-            'message': 'Chat history cleared (not yet implemented)'
-        })
+        user_email = session.get('user_email')
+        bearer_token = session.get('bearer_token')
+        
+        if not user_email:
+            return jsonify({'error': 'User email not found in session'}), 400
+        
+        if not bearer_token:
+            return jsonify({'error': 'Bearer token not found in session'}), 400
+        
+        logger.info(f"🗑️ Clearing chat history for {user_email}")
+        
+        # Get current agent and session ID
+        agent, session_id = get_or_create_session_for_user(user_email, bearer_token)
+        
+        if not agent or not session_id:
+            logger.warning(f"⚠️ No active session found for {user_email}")
+            return jsonify({
+                'success': True,
+                'message': 'No active session to clear'
+            })
+        
+        try:
+            # Connect to Llama Stack's kvstore database
+            db_path = KVSTORE_DB_PATH
+            if not os.path.exists(db_path):
+                logger.warning(f"⚠️ kvstore.db not found at {db_path}")
+                return jsonify({
+                    'success': True,
+                    'message': 'No chat history database found to clear'
+                })
+            
+            logger.info(f"🔍 Clearing history from kvstore database at: {db_path}")
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Delete all turn data for this session
+            session_pattern = f"session:{agent.agent_id}:{session_id}:%"
+            logger.info(f"🗑️ Deleting records matching pattern: {session_pattern}")
+            
+            cursor.execute("""
+                DELETE FROM kvstore 
+                WHERE key LIKE ?
+            """, (session_pattern,))
+            
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"✅ Deleted {deleted_count} records from kvstore database")
+            
+            # Clear the session from our cache and Flask session to force a new session
+            from utils.llama_agents_utils import clear_user_session
+            clear_user_session(user_email)
+            
+            return jsonify({
+                'success': True,
+                'message': f'Chat history cleared ({deleted_count} records deleted)',
+                'deleted_count': deleted_count
+            })
+            
+        except Exception as db_error:
+            logger.error(f"❌ Error clearing chat history from database: {db_error}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': False,
+                'message': f'Failed to clear chat history: {str(db_error)}'
+            }), 500
         
     except Exception as e:
         logger.error(f"❌ Error clearing chat history: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500 

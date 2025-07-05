@@ -20,7 +20,7 @@ from utils.mcp_tokens_utils import (
     request_mcp_token,
     prepare_mcp_headers_for_user
 )
-from utils.llama_agents_utils import get_or_create_user_agent, send_message_to_llama_stack
+from utils.llama_agents_utils import get_or_create_session_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +132,13 @@ def create_auth_error_response(error_details: dict, message: str, user_email: st
 def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0):
     """Stream agent response with clean authorization error detection and automatic token exchange"""
     # Import here to avoid circular imports
-    from utils.llama_agents_utils import get_or_create_user_agent
+    from utils.llama_agents_utils import get_or_create_session_for_user
     
     try:
         logger.info(f"🌊 Streaming message to agent: {message} (retry_count: {retry_count})")
         
-        # Get or create user-specific agent
-        agent, agent_session_id = get_or_create_user_agent(user_email, bearer_token)
+        # Get or create user-specific agent and session
+        agent, agent_session_id = get_or_create_session_for_user(user_email, bearer_token)
         
         if not agent or not agent_session_id:
             yield "❌ Failed to initialize agent. Please check if Llama Stack is running on port 8321.\n"
