@@ -5,7 +5,8 @@ JWT utilities for token generation and verification
 import os
 import json
 import logging
-from typing import Optional, List
+import os
+from typing import Optional, List, Dict
 import jwt
 from cryptography.hazmat.primitives import serialization
 from models.schemas import TokenPayload
@@ -165,3 +166,5 @@ def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str
     
     logger.info(f"🎫 Generated JWT token for {user.email} with scopes: {scopes}, audience: {token_audience}")
     return token 
+
+# MCP server discovery moved to chat-ui client since only the client has access to Llama Stack 

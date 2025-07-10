@@ -3,7 +3,7 @@ API routes for tools, tokens, approvals, etc.
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, Request, Depends, Form
+from fastapi import APIRouter, HTTPException, Request, Depends, Form, Cookie
 from fastapi.responses import JSONResponse
 from auth.session_manager import verify_user_auth
 from models.schemas import TokenPayload
@@ -15,6 +15,8 @@ from utils.approval_utils import (
 from utils.jwt_utils import generate_token, build_jwt_io_url, get_public_key_pem
 from database import auth_db
 from datetime import datetime, timedelta
+from auth.session_manager import sessions
+from config.settings import COOKIE_NAME
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -131,8 +133,34 @@ async def upgrade_scope(
         
         logger.info(f"🔄 Scope upgrade request from {user.email} for scopes: {scopes}, resource: {resource_uri}")
         
+        # Allow empty scopes for initial token generation
         if not scopes:
-            raise HTTPException(status_code=400, detail="No scopes requested")
+            logger.info(f"🔐 Initial token generation request for {user.email} with empty scope, resource: {resource_uri}")
+            
+            # Generate initial token with empty scope for the specified resource
+            if resource_uri:
+                initial_token = generate_token(user, [], resource_uri)  # Empty scopes list
+                logger.info(f"✅ Generated initial MCP token for {user.email} with empty scope, audience: {resource_uri}")
+                
+                # Store the token in the database
+                success = auth_db.store_mcp_token(user.email, resource_uri, initial_token)
+                if success:
+                    logger.info(f"🔐 Stored initial MCP token for {user.email} -> {resource_uri}")
+                else:
+                    logger.error(f"❌ Failed to store initial MCP token for {user.email} -> {resource_uri}")
+                
+                return {
+                    "success": True,
+                    "auto_approved_scopes": [],
+                    "pending_approval_scopes": [],
+                    "approval_request_ids": [],
+                    "new_token": initial_token,
+                    "message": f"Initial MCP token generated with empty scope for {resource_uri}"
+                }
+            else:
+                raise HTTPException(status_code=400, detail="Resource URI is required for initial token generation")
+        
+        # For non-empty scopes, continue with normal approval flow
         
         # Evaluate approval policy
         policy_result = evaluate_approval_policy(user.email, scopes)
@@ -378,12 +406,18 @@ async def get_initial_token(
         logger.info(f"🎯 DEBUG: Token generation - resource: {resource}, audience: {resource}")
         token = generate_token(user, token_scopes, audience=resource)
         
-        # Store the token in the database for future retrieval
-        success = auth_db.store_mcp_token(user.email, resource, token)
-        if success:
-            logger.info(f"🔐 Stored initial MCP token for {user.email} -> {resource}")
+        # Only store in MCP tokens table if this is actually an MCP server, not Llama Stack
+        llama_stack_url = "http://localhost:8321"
+        if resource != llama_stack_url and not resource.startswith(llama_stack_url):
+            # This is an MCP server token - store it
+            success = auth_db.store_mcp_token(user.email, resource, token)
+            if success:
+                logger.info(f"🔐 Stored MCP token for {user.email} -> {resource}")
+            else:
+                logger.warning(f"⚠️ Failed to store MCP token for {user.email} -> {resource}")
         else:
-            logger.warning(f"⚠️ Failed to store initial MCP token for {user.email} -> {resource}")
+            # This is a Llama Stack token - don't store in MCP tokens table
+            logger.info(f"🎯 Generated Llama Stack token for {user.email} (not storing in MCP tokens table)")
         
         logger.info(f"✅ Generated initial token for {user.email} with approved scopes: {token_scopes}")
         
@@ -495,11 +529,11 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
         
     except Exception as e:
         logger.error(f"❌ Failed to check token update: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") 
 
 @router.get("/user-mcp-tokens")
 async def get_user_mcp_tokens(user_email: str):
-    """Get MCP tokens for a user"""
+    """Get all MCP tokens for a user"""
     try:
         # Get tokens from database
         tokens = auth_db.get_mcp_tokens(user_email)
@@ -514,4 +548,163 @@ async def get_user_mcp_tokens(user_email: str):
         
     except Exception as e:
         logger.error(f"❌ Failed to get MCP tokens for {user_email}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error") 
+        return {"success": False, "error": str(e), "tokens": {}}
+
+# Consent request endpoints
+@router.post("/consent-requests")
+async def create_consent_request(request: Request):
+    """Create a new consent request"""
+    try:
+        data = await request.json()
+        consent_id = data.get('consent_id')
+        user_email = data.get('user_email')
+        tool_name = data.get('tool_name')
+        required_scope = data.get('required_scope')
+        mcp_server_url = data.get('mcp_server_url')
+        status = data.get('status', 'pending')
+        
+        logger.info(f"Creating consent request: {consent_id} for {user_email}")
+        
+        # Store in database
+        success = auth_db.create_consent_request(
+            consent_id=consent_id,
+            user_email=user_email,
+            tool_name=tool_name,
+            required_scope=required_scope,
+            mcp_server_url=mcp_server_url,
+            status=status
+        )
+        
+        if success:
+            return {"status": "success", "message": "Consent request created"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create consent request")
+            
+    except Exception as e:
+        logger.error(f"Error creating consent request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/consent-requests/pending/{user_email}")
+async def get_pending_consent_requests(user_email: str):
+    """Get pending consent requests for a user"""
+    try:
+        pending_requests = auth_db.get_pending_consent_requests(user_email)
+        
+        return {
+            "pending_requests": [
+                {
+                    "consent_id": req.consent_id,
+                    "tool_name": req.tool_name,
+                    "required_scope": req.required_scope,
+                    "mcp_server_url": req.mcp_server_url,
+                    "created_at": req.created_at.isoformat()
+                }
+                for req in pending_requests
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting pending consent requests: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/consent-requests/{consent_id}")
+async def get_consent_request(consent_id: str):
+    """Get consent request status"""
+    try:
+        consent_request = auth_db.get_consent_request(consent_id)
+        
+        if not consent_request:
+            raise HTTPException(status_code=404, detail="Consent request not found")
+            
+        return {
+            "consent_id": consent_request.consent_id,
+            "user_email": consent_request.user_email,
+            "tool_name": consent_request.tool_name,
+            "required_scope": consent_request.required_scope,
+            "mcp_server_url": consent_request.mcp_server_url,
+            "status": consent_request.status,
+            "response": consent_request.response,
+            "created_at": consent_request.created_at.isoformat(),
+            "updated_at": consent_request.updated_at.isoformat() if consent_request.updated_at else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting consent request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/consent-requests/{consent_id}")
+async def update_consent_request(consent_id: str, request: Request):
+    """Update consent request response"""
+    try:
+        data = await request.json()
+        status = data.get('status')
+        response = data.get('response')
+        
+        logger.info(f"Updating consent request {consent_id}: status={status}, response={response}")
+        
+        success = auth_db.update_consent_request(
+            consent_id=consent_id,
+            status=status,
+            response=response
+        )
+        
+        if success:
+            return {"status": "success", "message": "Consent request updated"}
+        else:
+            raise HTTPException(status_code=404, detail="Consent request not found")
+            
+    except Exception as e:
+        logger.error(f"Error updating consent request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# MCP server discovery is now handled by the chat-ui client
+# since only the client has access to Llama Stack
+
+@router.post("/clear-mcp-tokens")
+async def clear_mcp_tokens(
+    request: dict,
+    session_cookie: str = Cookie(default=None, alias=COOKIE_NAME)
+):
+    """
+    Clear MCP tokens for testing dynamic discovery.
+    """
+    logger.info("🧹 MCP token clearing requested")
+    
+    # Check authentication
+    if not session_cookie or session_cookie not in sessions:
+        logger.error("❌ No valid session for clearing MCP tokens")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    user_data = sessions[session_cookie]
+    user_email = user_data.email
+    
+    # Only allow clearing for specific users or all (if admin)
+    clear_all = request.get("clear_all", False)
+    
+    try:
+        if clear_all:
+            # Clear all MCP tokens (admin only)
+            success = auth_db.clear_all_mcp_tokens()
+            if success:
+                logger.info("🧹 Cleared all MCP tokens from database")
+                return {
+                    "success": True,
+                    "message": "All MCP tokens cleared"
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Failed to clear all MCP tokens")
+        else:
+            # Clear tokens for current user
+            success = auth_db.clear_mcp_tokens_for_user(user_email)
+            if success:
+                logger.info(f"🧹 Cleared MCP tokens for user {user_email}")
+                return {
+                    "success": True,
+                    "message": f"MCP tokens cleared for {user_email}"
+                }
+            else:
+                raise HTTPException(status_code=500, detail=f"Failed to clear MCP tokens for {user_email}")
+                
+    except Exception as e:
+        logger.error(f"❌ MCP token clearing failed: {e}")
+        raise HTTPException(status_code=500, detail=f"MCP token clearing failed: {str(e)}") 

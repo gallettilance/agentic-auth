@@ -72,6 +72,18 @@ class Client:
     created_at: datetime
     updated_at: datetime
 
+@dataclass
+class ConsentRequest:
+    consent_id: str
+    user_email: str
+    tool_name: str
+    required_scope: str
+    mcp_server_url: str
+    status: str
+    response: Optional[bool]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
 class AuthDatabase:
     """Production-grade authentication database"""
     
@@ -250,13 +262,26 @@ class AuthDatabase:
                     user_email TEXT NOT NULL,
                     server_url TEXT NOT NULL,
                     token TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_email) REFERENCES users (email),
                     UNIQUE (user_email, server_url)
                 );
                 
                 CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens (user_email);
+                
+                -- Consent requests table
+                CREATE TABLE IF NOT EXISTS consent_requests (
+                    consent_id TEXT PRIMARY KEY,
+                    user_email TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    required_scope TEXT NOT NULL,
+                    mcp_server_url TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'denied')),
+                    response BOOLEAN,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
+                    FOREIGN KEY (user_email) REFERENCES users (email)
+                );
             """)
             
             # Initialize default data
@@ -1080,6 +1105,127 @@ class AuthDatabase:
         except Exception as e:
             logger.error(f"❌ Failed to get MCP tokens for {user_email}: {e}")
             return {}
+
+    def clear_all_mcp_tokens(self) -> bool:
+        """Clear all MCP tokens from the database (for testing)"""
+        try:
+            with self.get_connection() as conn:
+                result = conn.execute("DELETE FROM mcp_tokens")
+                count = result.rowcount
+                logger.info(f"🧹 Cleared {count} MCP tokens from database")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to clear MCP tokens: {e}")
+            return False
+
+    def clear_mcp_tokens_for_user(self, user_email: str) -> bool:
+        """Clear all MCP tokens for a specific user"""
+        try:
+            with self.get_connection() as conn:
+                result = conn.execute("DELETE FROM mcp_tokens WHERE user_email = ?", (user_email,))
+                count = result.rowcount
+                logger.info(f"🧹 Cleared {count} MCP tokens for user {user_email}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to clear MCP tokens for {user_email}: {e}")
+            return False
+
+    def create_consent_request(self, consent_id: str, user_email: str, tool_name: str, 
+                             required_scope: str, mcp_server_url: str, status: str = 'pending') -> bool:
+        """Create a new consent request"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO consent_requests 
+                    (consent_id, user_email, tool_name, required_scope, mcp_server_url, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (consent_id, user_email, tool_name, required_scope, mcp_server_url, status))
+                
+                logger.info(f"🔐 Created consent request {consent_id} for {user_email}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to create consent request {consent_id}: {e}")
+            return False
+
+    def get_consent_request(self, consent_id: str) -> Optional[ConsentRequest]:
+        """Get a consent request by ID"""
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT * FROM consent_requests WHERE consent_id = ?
+                """, (consent_id,)).fetchone()
+                
+                if row:
+                    return ConsentRequest(
+                        consent_id=row['consent_id'],
+                        user_email=row['user_email'],
+                        tool_name=row['tool_name'],
+                        required_scope=row['required_scope'],
+                        mcp_server_url=row['mcp_server_url'],
+                        status=row['status'],
+                        response=row['response'],
+                        created_at=datetime.fromisoformat(row['created_at']),
+                        updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
+                    )
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get consent request {consent_id}: {e}")
+            return None
+
+    def get_pending_consent_requests(self, user_email: str) -> List[ConsentRequest]:
+        """Get all pending consent requests for a user"""
+        try:
+            with self.get_connection() as conn:
+                rows = conn.execute("""
+                    SELECT * FROM consent_requests 
+                    WHERE user_email = ? AND status = 'pending'
+                    ORDER BY created_at DESC
+                """, (user_email,)).fetchall()
+                
+                requests = []
+                for row in rows:
+                    requests.append(ConsentRequest(
+                        consent_id=row['consent_id'],
+                        user_email=row['user_email'],
+                        tool_name=row['tool_name'],
+                        required_scope=row['required_scope'],
+                        mcp_server_url=row['mcp_server_url'],
+                        status=row['status'],
+                        response=row['response'],
+                        created_at=datetime.fromisoformat(row['created_at']),
+                        updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
+                    ))
+                
+                return requests
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get pending consent requests for {user_email}: {e}")
+            return []
+
+    def update_consent_request(self, consent_id: str, status: str, response: Optional[bool] = None) -> bool:
+        """Update a consent request"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    UPDATE consent_requests 
+                    SET status = ?, response = ?, updated_at = datetime('now')
+                    WHERE consent_id = ?
+                """, (status, response, consent_id))
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"✅ Updated consent request {consent_id}: status={status}, response={response}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Consent request {consent_id} not found")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to update consent request {consent_id}: {e}")
+            return False
 
 # Global database instance
 auth_db = AuthDatabase()

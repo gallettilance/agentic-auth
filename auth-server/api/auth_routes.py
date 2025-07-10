@@ -139,25 +139,8 @@ async def oauth_callback(code: str, state: str):
             
             logger.info(f"🔐 User session token created with empty scope (RFC 8693 compliant): {user_email}")
             
-            # Generate MCP token immediately as well
-            mcp_server_url = "http://localhost:8001"
-            logger.info(f"🎫 Generating initial MCP token for {user_email} -> {mcp_server_url}")
-            
-            try:
-                from utils.jwt_utils import generate_token
-                mcp_token = generate_token(user_data, [], audience=mcp_server_url)
-                logger.info(f"✅ Generated MCP token for {user_email}: {mcp_token[:20]}...")
-                
-                # Store MCP token in database for the user
-                success = auth_db.store_mcp_token(user_email, mcp_server_url, mcp_token)
-                if success:
-                    logger.info(f"🔐 Stored MCP token for {user_email} -> {mcp_server_url}")
-                else:
-                    logger.error(f"❌ Failed to store MCP token for {user_email}")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to generate MCP token for {user_email}: {e}")
-                # Continue with session creation even if MCP token fails
+            # Generate ONLY Llama Stack token initially
+            # MCP tokens will be generated after querying toolgroups
             
             session_id = create_session(user_data)
             

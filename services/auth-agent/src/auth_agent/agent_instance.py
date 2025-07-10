@@ -319,8 +319,9 @@ class AuthChatAgent(ChatAgent):
                 required_scope = scope_match.group(1)
             
             # For FastMCP errors, we need to determine the MCP server URL
-            # Since it's not in the error message, we'll use environment variable or default
-            mcp_server_url = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+            # Since it's not in the error message, we'll discover it dynamically
+            # Note: MCP server URL should be determined at runtime from toolgroups
+            mcp_server_url = None  # Will be determined dynamically at runtime
             
             return {
                 "error_type": error_type,

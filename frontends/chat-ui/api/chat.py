@@ -16,7 +16,7 @@ import time
 from utils.auth_utils import check_auth_server_session_direct, is_authorization_error, extract_authorization_error_details
 from utils.streaming_utils import stream_agent_response_with_auth_detection
 from utils.llama_agents_utils import send_message_to_llama_stack, get_or_create_user_agent, get_or_create_session_for_user
-from utils.mcp_tokens_utils import get_mcp_tokens_for_user_direct
+from utils.mcp_tokens_utils import get_mcp_tokens_for_user_direct, AUTH_SERVER_URL
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -420,4 +420,51 @@ def clear_chat_history():
         logger.error(f"❌ Error clearing chat history: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500 
+        return jsonify({'error': str(e)}), 500
+
+@chat_bp.route('/consent-response', methods=['POST'])
+def handle_consent_response():
+    """Handle user consent response for scope upgrade"""
+    try:
+        data = request.get_json()
+        consent_id = data.get('consent_id')
+        approved = data.get('approved', False)
+        
+        logger.info(f"Consent response received: consent_id={consent_id}, approved={approved}")
+        
+        if not consent_id:
+            return jsonify({'status': 'error', 'message': 'Missing consent_id'}), 400
+        
+        # Update consent response in auth server database
+        try:
+            import httpx
+            import asyncio
+            
+            async def update_consent_response():
+                async with httpx.AsyncClient() as client:
+                    response = await client.put(
+                        f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
+                        json={
+                            'status': 'completed' if approved else 'denied',
+                            'response': approved
+                        },
+                        timeout=5.0
+                    )
+                    return response.status_code, response.json() if response.status_code == 200 else None
+            
+            status_code, result = asyncio.run(update_consent_response())
+            
+            if status_code == 200:
+                logger.info(f"✅ Updated consent {consent_id} in auth server: {approved}")
+                return jsonify({'status': 'success', 'message': 'Consent response recorded'})
+            else:
+                logger.error(f"❌ Failed to update consent in auth server: {status_code}")
+                return jsonify({'status': 'error', 'message': 'Failed to update consent'}), 500
+                
+        except Exception as e:
+            logger.error(f"❌ Error calling auth server: {e}")
+            return jsonify({'status': 'error', 'message': 'Auth server error'}), 500
+        
+    except Exception as e:
+        logger.error(f"Error handling consent response: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500 

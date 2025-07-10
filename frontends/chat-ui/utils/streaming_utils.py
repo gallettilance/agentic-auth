@@ -22,6 +22,9 @@ from utils.mcp_tokens_utils import (
 )
 from utils.llama_agents_utils import get_or_create_session_for_user
 
+# Global variable for simple consent mechanism
+user_consent_response = None
+
 logger = logging.getLogger(__name__)
 
 def process_streaming_log(log, tool_already_printed: dict, full_content_buffer: list) -> tuple[str, bool]:
@@ -133,6 +136,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
     """Stream agent response with clean authorization error detection and automatic token exchange"""
     # Import here to avoid circular imports
     from utils.llama_agents_utils import get_or_create_session_for_user
+    import time
     
     try:
         logger.info(f"🌊 Streaming message to agent: {message} (retry_count: {retry_count})")
@@ -247,6 +251,93 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         
                         new_token = token_result.get('access_token') or token_result.get('new_token')
                         if new_token:
+                            # Only ask for user consent if this was AUTO-APPROVED (has a new token ready)
+                            # If it requires manual approval, we already handled it above
+                            logger.info(f"🔐 Auto-approved scope received new token, asking for user consent")
+                            
+                            import uuid
+                            import httpx
+                            consent_id = str(uuid.uuid4())
+                            
+                            # Store consent request in auth server database FIRST
+                            logger.info(f"🔍 DEBUG: Storing consent request in auth server before notifying frontend...")
+                            try:
+                                from utils.mcp_tokens_utils import AUTH_SERVER_URL
+                                async def store_consent_request():
+                                    async with httpx.AsyncClient() as client:
+                                        await client.post(
+                                            f'{AUTH_SERVER_URL}/api/consent-requests',
+                                            json={
+                                                'consent_id': consent_id,
+                                                'user_email': user_email,
+                                                'tool_name': tool_name,
+                                                'required_scope': required_scope,
+                                                'mcp_server_url': mcp_server_url,
+                                                'status': 'pending'
+                                            },
+                                            timeout=5.0
+                                        )
+                                asyncio.run(store_consent_request())
+                                logger.info(f"✅ Stored consent request {consent_id} in auth server")
+                                
+                                # Immediately trigger consent popup via direct frontend notification
+                                yield f"data: {{\"type\": \"consent_required\", \"consent_id\": \"{consent_id}\", \"tool_name\": \"{tool_name}\", \"required_scope\": \"{required_scope}\"}}\n\n"
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Failed to store consent request: {e}")
+                                yield f"❌ Error storing consent request.\n"
+                                return
+                            
+                            # Wait for user response using auth server database
+                            logger.info(f"🔍 DEBUG: Waiting for consent response for {consent_id}")
+                            yield f"🔐 Waiting for permission to use {tool_name} with scope {required_scope}...\n"
+                            
+                            # Wait for consent response from auth server
+                            timeout_count = 0
+                            user_approved = None
+                            
+                            while user_approved is None and timeout_count < 120:  # 60 second timeout
+                                try:
+                                    async def check_consent_response():
+                                        async with httpx.AsyncClient() as client:
+                                            response = await client.get(
+                                                f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
+                                                timeout=5.0
+                                            )
+                                            if response.status_code == 200:
+                                                data = response.json()
+                                                return data.get('status'), data.get('response')
+                                            return None, None
+                                    
+                                    status, response = asyncio.run(check_consent_response())
+                                    
+                                    if status == 'completed':
+                                        user_approved = response
+                                        logger.info(f"✅ Consent response received: {user_approved}")
+                                        break
+                                    elif status == 'denied':
+                                        user_approved = False
+                                        logger.info(f"❌ Consent denied")
+                                        break
+                                        
+                                except Exception as e:
+                                    logger.error(f"Error checking consent: {e}")
+                                    
+                                logger.info(f"Waiting for consent response... attempt {timeout_count}")
+                                time.sleep(0.5)
+                                timeout_count += 1
+                            
+                            if user_approved is None:
+                                yield f"⏰ Consent request timed out. Please try again.\n"
+                                return
+                            
+                            # Check if user approved
+                            if not user_approved:
+                                yield f"❌ Permission denied. Cannot proceed with {tool_name}.\n"
+                                return
+                            
+                            yield f"✅ Permission approved. Storing token...\n"
+                            
                             # Store MCP token using helper function (use base_mcp_url for consistency)
                             store_mcp_token_for_user_direct(user_email, base_mcp_url, new_token)
                             logger.info(f"✅ Stored MCP token for {base_mcp_url} via helper function")
@@ -408,6 +499,93 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                     
                     new_token = token_result.get('access_token') or token_result.get('new_token')
                     if new_token:
+                        # Only ask for user consent if this was AUTO-APPROVED (has a new token ready)
+                        # If it requires manual approval, we already handled it above
+                        logger.info(f"🔐 Auto-approved scope received new token, asking for user consent")
+                        
+                        import uuid
+                        import httpx
+                        consent_id = str(uuid.uuid4())
+                        
+                        # Store consent request in auth server database FIRST
+                        logger.info(f"🔍 DEBUG: Storing consent request in auth server before notifying frontend...")
+                        try:
+                            from utils.mcp_tokens_utils import AUTH_SERVER_URL
+                            async def store_consent_request():
+                                async with httpx.AsyncClient() as client:
+                                    await client.post(
+                                        f'{AUTH_SERVER_URL}/api/consent-requests',
+                                        json={
+                                            'consent_id': consent_id,
+                                            'user_email': user_email,
+                                            'tool_name': tool_name,
+                                            'required_scope': required_scope,
+                                            'mcp_server_url': mcp_server_url,
+                                            'status': 'pending'
+                                        },
+                                        timeout=5.0
+                                    )
+                            asyncio.run(store_consent_request())
+                            logger.info(f"✅ Stored consent request {consent_id} in auth server")
+                            
+                            # Immediately trigger consent popup via direct frontend notification
+                            yield f"data: {{\"type\": \"consent_required\", \"consent_id\": \"{consent_id}\", \"tool_name\": \"{tool_name}\", \"required_scope\": \"{required_scope}\"}}\n\n"
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Failed to store consent request: {e}")
+                            yield f"❌ Error storing consent request.\n"
+                            return
+                        
+                        # Wait for user response using auth server database
+                        logger.info(f"🔍 DEBUG: Waiting for consent response for {consent_id}")
+                        yield f"🔐 Waiting for permission to use {tool_name} with scope {required_scope}...\n"
+                        
+                        # Wait for consent response from auth server
+                        timeout_count = 0
+                        user_approved = None
+                        
+                        while user_approved is None and timeout_count < 120:  # 60 second timeout
+                            try:
+                                async def check_consent_response():
+                                    async with httpx.AsyncClient() as client:
+                                        response = await client.get(
+                                            f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
+                                            timeout=5.0
+                                        )
+                                        if response.status_code == 200:
+                                            data = response.json()
+                                            return data.get('status'), data.get('response')
+                                        return None, None
+                                
+                                status, response = asyncio.run(check_consent_response())
+                                
+                                if status == 'completed':
+                                    user_approved = response
+                                    logger.info(f"✅ Consent response received: {user_approved}")
+                                    break
+                                elif status == 'denied':
+                                    user_approved = False
+                                    logger.info(f"❌ Consent denied")
+                                    break
+                                    
+                            except Exception as e:
+                                logger.error(f"Error checking consent: {e}")
+                                
+                            logger.info(f"Waiting for consent response... attempt {timeout_count}")
+                            time.sleep(0.5)
+                            timeout_count += 1
+                        
+                        if user_approved is None:
+                            yield f"⏰ Consent request timed out. Please try again.\n"
+                            return
+                        
+                        # Check if user approved
+                        if not user_approved:
+                            yield f"❌ Permission denied. Cannot proceed with {tool_name}.\n"
+                            return
+                        
+                        yield f"✅ Permission approved. Storing token...\n"
+                        
                         # Store MCP token using helper function (use base_mcp_url for consistency)
                         store_mcp_token_for_user_direct(user_email, base_mcp_url, new_token)
                         logger.info(f"✅ Stored MCP token for {base_mcp_url} via helper function")

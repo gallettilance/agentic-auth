@@ -165,18 +165,93 @@ def approve_request(request_id: str, admin_email: str) -> bool:
             resource_uri = request.metadata['resource_uri']
             logger.info(f"🎫 Using resource URI from approval request: {resource_uri}")
         
-        # Get existing pending update or create new one
-        existing_update = auth_db.get_pending_token_update(user_email)
-        if existing_update:
-            # Add new scope to existing update
-            new_scopes = existing_update['new_scopes']
-            if new_scope not in new_scopes:
-                new_scopes.append(new_scope)
+        # CRITICAL FIX: Immediately generate and store new MCP token instead of just adding pending update
+        if resource_uri:
+            try:
+                # Get user's current scopes from existing MCP token (not all approved scopes)
+                existing_mcp_tokens = auth_db.get_mcp_tokens(user_email)
+                current_scopes = []
+                
+                if resource_uri in existing_mcp_tokens:
+                    # Decode existing token to get current scopes
+                    existing_token = existing_mcp_tokens[resource_uri]
+                    try:
+                        import jwt
+                        # Decode without verification to get payload
+                        payload = jwt.decode(existing_token, options={"verify_signature": False})
+                        current_scope_str = payload.get('scope', '')
+                        current_scopes = current_scope_str.split() if current_scope_str else []
+                        logger.info(f"🔍 Current scopes from existing token: {current_scopes}")
+                    except Exception as decode_error:
+                        logger.warning(f"⚠️ Failed to decode existing token, starting with empty scopes: {decode_error}")
+                        current_scopes = []
+                else:
+                    logger.info(f"🔍 No existing token for {resource_uri}, starting with empty scopes")
+                    current_scopes = []
+                
+                # Add ONLY the newly approved scope
+                updated_scopes = current_scopes.copy()
+                if new_scope not in updated_scopes:
+                    updated_scopes.append(new_scope)
+                
+                logger.info(f"🎫 Generating new MCP token for {user_email}: {current_scopes} + [{new_scope}] = {updated_scopes}")
+                
+                # Generate new MCP token with updated scopes
+                from utils.jwt_utils import generate_token
+                from models.schemas import TokenPayload
+                
+                # Create a token payload for the user
+                user_token_payload = TokenPayload(
+                    sub=user_email,
+                    email=user_email,
+                    aud=resource_uri,
+                    scope=' '.join(updated_scopes),
+                    exp=int((datetime.now() + timedelta(hours=1)).timestamp()),
+                    iat=int(datetime.now().timestamp()),
+                    iss="http://localhost:8002"
+                )
+                
+                # Generate new token for the specific MCP resource
+                new_mcp_token = generate_token(user_token_payload, updated_scopes, audience=resource_uri)
+                
+                # Store the new token in the database
+                success = auth_db.store_mcp_token(user_email, resource_uri, new_mcp_token)
+                
+                if success:
+                    logger.info(f"✅ Generated and stored new MCP token for {user_email} -> {resource_uri}")
+                    logger.info(f"🔐 Token includes approved scope: {new_scope}")
+                    
+                    # ALSO add a pending token update record to trigger frontend notifications
+                    auth_db.add_pending_token_update(user_email, [new_scope], 'manual', audience=resource_uri)
+                    logger.info(f"✅ Added pending token update for frontend notification")
+                    
+                else:
+                    logger.error(f"❌ Failed to store new MCP token for {user_email} -> {resource_uri}")
+                    
+                    # Add pending update as fallback
+                    auth_db.add_pending_token_update(user_email, [new_scope], 'manual', audience=resource_uri)
+            except Exception as token_error:
+                logger.error(f"❌ Failed to generate new MCP token: {token_error}")
+                # Fallback to pending update mechanism
+                logger.info(f"⚠️ Falling back to pending token update mechanism")
+                
+                # Add pending update as fallback
+                auth_db.add_pending_token_update(user_email, [new_scope], 'manual', audience=resource_uri)
         else:
-            new_scopes = [new_scope]
-        
-        # Store the pending update in database with the resource URI
-        auth_db.add_pending_token_update(user_email, new_scopes, 'manual', audience=resource_uri)
+            logger.warning(f"⚠️ No resource URI found for approval request {request_id}, using pending update mechanism")
+            
+            # Get existing pending update or create new one  
+            existing_update = auth_db.get_pending_token_update(user_email)
+            if existing_update:
+                # Add new scope to existing update
+                new_scopes = existing_update['new_scopes']
+                if new_scope not in new_scopes:
+                    new_scopes.append(new_scope)
+            else:
+                new_scopes = [new_scope]
+            
+            # Store the pending update in database with the resource URI
+            auth_db.add_pending_token_update(user_email, new_scopes, 'manual', audience=resource_uri)
         
         logger.info(f"✅ Approved request {request_id} by {admin_email}")
         logger.info(f"🎫 Marked {user_email} for token update with scope: {new_scope}, resource: {resource_uri}")

@@ -4,15 +4,12 @@ import logging
 import os
 import subprocess
 import shlex
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any
-import json
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import BearerAuthProvider
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +47,37 @@ logger.info(f"🎯 Expected Audience: {SERVER_URI}")
 logger.info(f"🏢 Expected Issuer: {AUTH_SERVER_URI}")
 logger.info(f"📝 Algorithm: RS256")
 logger.info(f"🎯 DEBUG: MCP server will ONLY accept tokens with audience='{SERVER_URI}'")
+
+# ============================================================================
+# DISCOVERY ENDPOINTS - OAuth Protected Resource Discovery
+# ============================================================================
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request):
+    """
+    OAuth Protected Resource Discovery endpoint (RFC 9728)
+    
+    Returns:
+        Dictionary containing OAuth protection metadata for this resource
+    """
+    logger.info("🔍 Discovery request: /.well-known/oauth-protected-resource")
+    
+    from fastapi.responses import JSONResponse
+    
+    return JSONResponse({
+        "resource": SERVER_URI,
+        "authorization_server": AUTH_SERVER_URI,
+        "jwks_uri": f"{AUTH_SERVER_URI}/.well-known/jwks.json",
+        "scopes_supported": [
+            "list_files",
+            "execute_command", 
+            "get_server_info",
+            "health_check",
+            "list_tool_scopes"
+        ],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{SERVER_URI}/docs"
+    })
 
 # ============================================================================
 # MCP TOOLS - Using FastMCP's native required_scope parameter
@@ -180,37 +208,6 @@ async def get_server_info() -> Dict[str, Any]:
         "message": "Authentication successful - you have access to this MCP server"
     }
 
-@mcp.tool(required_scope="get_oauth_metadata")
-async def get_oauth_metadata() -> Dict[str, Any]:
-    """
-    Get OAuth 2.0 Protected Resource Metadata (RFC 9728).
-    
-    Returns:
-        OAuth 2.0 Protected Resource Metadata
-    """
-    logger.info(f"🔧 Tool called: get_oauth_metadata()")
-    
-    # OAuth 2.0 Protected Resource Metadata (RFC 9728)
-    metadata = {
-        "resource": SERVER_URI,
-        "authorization_server": AUTH_SERVER_URI,
-        "jwks_uri": f"{AUTH_SERVER_URI}/.well-known/jwks.json",
-        "scopes_supported": [
-            "list_files",
-            "execute_command", 
-            "get_server_info",
-            "get_oauth_metadata",
-            "health_check",
-            "list_tool_scopes",
-            "verify_domain"
-        ],
-        "bearer_methods_supported": ["header"],
-        "resource_documentation": f"{SERVER_URI}/docs"
-    }
-    
-    logger.info("✅ OAuth metadata retrieved successfully")
-    return metadata
-
 @mcp.tool(required_scope="health_check")
 async def health_check() -> Dict[str, Any]:
     """
@@ -255,10 +252,6 @@ async def list_tool_scopes() -> Dict[str, Any]:
             "description": "Get server information and authentication status",
             "required_scope": "get_server_info"
         },
-        "get_oauth_metadata": {
-            "description": "Get OAuth 2.0 Protected Resource Metadata",
-            "required_scope": "get_oauth_metadata"
-        },
         "health_check": {
             "description": "Check server health and authentication status",
             "required_scope": "health_check"
@@ -267,10 +260,6 @@ async def list_tool_scopes() -> Dict[str, Any]:
             "description": "List all available tools and their required scopes",
             "required_scope": "list_tool_scopes"
         },
-        "verify_domain": {
-            "description": "Verify domain ownership using verification token",
-            "required_scope": "verify_domain"
-        }
     }
     
     logger.info("✅ Tool scopes listed successfully")
@@ -280,79 +269,6 @@ async def list_tool_scopes() -> Dict[str, Any]:
         "total_tools": len(tool_scopes)
     }
 
-@mcp.tool(required_scope="verify_domain")
-async def verify_domain(domain: str, verification_token: str) -> Dict[str, Any]:
-    """
-    Verify domain ownership using verification token.
-    
-    Args:
-        domain: Domain name to verify
-        verification_token: Verification token for domain ownership
-        
-    Returns:
-        Dictionary containing domain verification results
-    """
-    logger.info(f"🔧 Tool called: verify_domain(domain='{domain}', verification_token='{verification_token}')")
-    logger.info(f"🔍 Verifying domain: {domain}")
-    
-    # Simulate domain verification (in real implementation, this would check DNS records, etc.)
-    if not domain or not verification_token:
-        logger.error("❌ Domain and verification token are required")
-        return {
-            "success": False,
-            "error": "Domain and verification token are required",
-            "domain": domain
-        }
-    
-    # Simple verification simulation
-    expected_token = f"verify_{domain.replace('.', '_')}"
-    if verification_token == expected_token:
-        logger.info(f"✅ Domain verified successfully: {domain}")
-        return {
-            "success": True,
-            "domain": domain,
-            "verified": True,
-            "timestamp": datetime.now().isoformat(),
-            "auth_method": "FastMCP with Native Scope Enforcement"
-        }
-    else:
-        logger.error(f"❌ Domain verification failed: {domain}")
-        return {
-            "success": False,
-            "domain": domain,
-            "verified": False,
-            "error": "Invalid verification token",
-            "expected_format": f"verify_{domain.replace('.', '_')}" if domain else "verify_your_domain_com"
-        }
-
-@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
-async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
-    """
-    OAuth 2.0 Protected Resource Metadata endpoint (RFC 9728).
-    
-    This endpoint provides metadata about the protected resource for OAuth clients.
-    """
-    logger.info("🔧 Route called: /.well-known/oauth-protected-resource")
-    
-    metadata = {
-        "resource": SERVER_URI,
-        "authorization_server": AUTH_SERVER_URI,
-        "jwks_uri": f"{AUTH_SERVER_URI}/.well-known/jwks.json",
-        "scopes_supported": [
-            "list_files",
-            "execute_command", 
-            "get_server_info",
-            "get_oauth_metadata",
-            "health_check",
-            "list_tool_scopes",
-            "verify_domain"
-        ],
-        "bearer_methods_supported": ["header"],
-        "resource_documentation": f"{SERVER_URI}/docs"
-    }
-    
-    logger.info("✅ OAuth protected resource metadata served")
-    return JSONResponse(content=metadata)
 
 if __name__ == "__main__":
     logger.info("="*80)

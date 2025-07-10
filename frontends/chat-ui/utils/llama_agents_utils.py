@@ -66,8 +66,8 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
             agent = user_data['agent']
             logger.info(f"🔄 Reusing existing agent for {user_email}")
             
-            # MCP tokens are now generated immediately during OAuth callback
-            logger.info(f"🎫 MCP tokens should already exist for {user_email} (generated during OAuth)")
+            # MCP tokens will be generated on-demand when tools require them
+            logger.info(f"🎫 MCP tokens will be generated on-demand when tools require them")
             
             return agent
         
@@ -97,8 +97,8 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         
         logger.info(f"✅ Created new agent for {user_email}")
         
-        # MCP tokens are now generated immediately during OAuth callback
-        logger.info(f"🎫 MCP tokens should already exist for {user_email} (generated during OAuth)")
+        # MCP tokens will be generated on-demand when needed by tools
+        logger.info(f"🎫 MCP tokens will be generated on-demand when tools require them")
         
         # Log token status
         if bearer_token and bearer_token != "NO_TOKEN_YET":

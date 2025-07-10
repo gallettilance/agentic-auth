@@ -186,10 +186,11 @@ def check_token_update():
                                 
                                 logger.info(f"🎫 Updated MCP token for {base_url} from {auth_server_url}")
                             elif audience:
-                                # Check if this is an MCP server token by comparing to configured MCP server URL
-                                primary_mcp_server = os.getenv('MCP_SERVER_URL')
-                                if primary_mcp_server and audience.startswith(primary_mcp_server):
-                                    # Fallback: if the main token has MCP audience, store it as MCP token too
+                                # Check if this is an MCP server token by checking if audience looks like an MCP server URL
+                                # MCP server URLs typically have patterns like localhost:8001, contain 'mcp', etc.
+                                if (audience.startswith(('http://localhost:', 'https://localhost:')) and 
+                                    audience.find(':800') != -1) or 'mcp' in audience.lower():
+                                    # This looks like an MCP server token - store it as MCP token
                                     # Import helper functions
                                     import sys
                                     import os
@@ -522,25 +523,42 @@ def update_mcp_token_cookie():
         if not token:
             return jsonify({'error': 'Token is required'}), 400
         
-        # Only set cookie for the primary MCP server to avoid cookie size issues
+        # For now, skip setting cookies to avoid cookie size issues with multiple MCP servers
+        # Cookies are not essential for MCP token functionality - tokens are stored in session/database
         base_server_url = server_url.rstrip('/sse') if server_url.endswith('/sse') else server_url
-        primary_mcp_server = os.getenv('MCP_SERVER_URL')
         
-        if primary_mcp_server and base_server_url == primary_mcp_server:
-            response = jsonify({'success': True, 'message': 'MCP token cookie updated'})
-            response.set_cookie(
-                'mcp_token',
-                token,
-                max_age=3600,
-                httponly=False,  # Allow JavaScript access for admin dashboard
-                secure=False,
-                samesite='lax'
-            )
-            logger.info(f"✅ Set MCP token cookie for {session.get('user_email', 'unknown')}: {token[:20]}...")
-            return response
-        else:
-            return jsonify({'success': True, 'message': 'Token stored but no cookie set (non-primary server)'})
+        # Skip cookie setting since we now support multiple dynamically discovered MCP servers
+        # and cookies have size limitations
+        logger.info(f"📋 MCP token stored for {base_server_url} (cookie skipped for {session.get('user_email', 'unknown')})")
+        return jsonify({'success': True, 'message': 'MCP token stored (cookie skipped for multi-server support)'})
         
     except Exception as e:
         logger.error(f"❌ Error updating MCP token cookie: {e}")
-        return jsonify({'error': str(e)}), 500 
+        return jsonify({'error': str(e)}), 500
+
+@tokens_bp.route('/test-service-discovery', methods=['GET'])
+def test_service_discovery():
+    """Test MCP service discovery functionality"""
+    try:
+        import asyncio
+        from utils.service_discovery import discover_mcp_auth_configs, get_configured_mcp_servers
+        
+        # Get configured MCP servers
+        mcp_servers = get_configured_mcp_servers()
+        
+        # Run MCP discovery
+        configs = asyncio.run(discover_mcp_auth_configs())
+        
+        return jsonify({
+            'success': True,
+            'configured_mcp_servers': mcp_servers,
+            'discovered_configs': configs,
+            'message': f'Discovered {len(configs)} MCP server configurations'
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ MCP service discovery test failed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500 

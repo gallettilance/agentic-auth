@@ -703,6 +703,89 @@
             cursor: not-allowed;
             transform: none;
         }
+        
+        /* Consent Dialog Styles */
+        .consent-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            z-index: 10000;
+            padding-right: 20px;
+        }
+        
+        .consent-dialog {
+            background: linear-gradient(135deg, #2a2a2e 0%, #35353a 100%);
+            border: 1px solid #4a4a4f;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            max-width: 400px;
+            width: 350px;
+            text-align: center;
+        }
+        
+        .consent-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ff8c82;
+            margin-bottom: 16px;
+        }
+        
+        .consent-message {
+            color: #d4d4d8;
+            margin-bottom: 24px;
+            line-height: 1.4;
+        }
+        
+        .consent-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+        
+        .consent-btn {
+            background: linear-gradient(135deg, #3a3a42 0%, #4a4a52 100%);
+            color: #e0e0e0;
+            border: 1px solid #5a5a62;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        .consent-btn:hover {
+            background: linear-gradient(135deg, #4a4a52 0%, #5a5a62 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        
+        .consent-yes {
+            background: linear-gradient(135deg, #2d4a3e 0%, #3a5a4e 100%) !important;
+            border-color: #4a6a5e !important;
+            color: #b8e6d0 !important;
+        }
+        
+        .consent-yes:hover {
+            background: linear-gradient(135deg, #3a5a4e 0%, #4a6a5e 100%) !important;
+        }
+        
+        .consent-no {
+            background: linear-gradient(135deg, #4a2e2e 0%, #5a3e3e 100%) !important;
+            border-color: #6a4e4e !important;
+            color: #e6b8b8 !important;
+        }
+        
+        .consent-no:hover {
+            background: linear-gradient(135deg, #5a3e3e 0%, #6a4e4e 100%) !important;
+        }
     </style>
 </head>
 <body>
@@ -773,6 +856,20 @@
                 >
                 <button type="submit" class="send-btn" id="sendBtn">Send</button>
             </form>
+        </div>
+    </div>
+
+    <!-- Consent Dialog Popup -->
+    <div class="consent-overlay" id="consentDialog" style="display: none;">
+        <div class="consent-dialog">
+            <div class="consent-header">🔐 Permission Required</div>
+            <div class="consent-message" id="consentMessage">
+                Grant permission to use tool with scope?
+            </div>
+            <div class="consent-buttons">
+                <button class="consent-btn consent-yes" id="consentYes">Yes</button>
+                <button class="consent-btn consent-no" id="consentNo">No</button>
+            </div>
         </div>
     </div>
 
@@ -1058,6 +1155,41 @@
                     
                     const chunk = decoder.decode(value, { stream: true });
                     content += chunk;
+                    
+                    // Check for consent notification (Server-Sent Events format)
+                    if (chunk.includes('"type": "consent_required"')) {
+                        try {
+                            const dataMatch = chunk.match(/data: ({.*})/);
+                            if (dataMatch) {
+                                const consentData = JSON.parse(dataMatch[1]);
+                                console.log("Consent request detected:", consentData);
+                                
+                                // Show consent popup immediately
+                                const userApproved = await showConsentPopup(consentData.tool_name, consentData.required_scope);
+                                
+                                // Send response to backend
+                                try {
+                                    console.log("Sending consent response:", userApproved);
+                                    const response = await fetch('/api/consent-response', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                        },
+                                        body: JSON.stringify({
+                                            consent_id: consentData.consent_id,
+                                            approved: userApproved
+                                        })
+                                    });
+                                    const responseData = await response.json();
+                                    console.log("Consent response result:", responseData);
+                                } catch (error) {
+                                    console.error("Error sending consent response:", error);
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse consent notification:", e);
+                        }
+                    }
                     
                     // Check for token update markers (auto-approval)
                     const tokenUpdateMatch = content.match(/__TOKEN_UPDATE_START__(.+?)__TOKEN_UPDATE_END__/);
@@ -1419,7 +1551,7 @@
         // Store pending authorization requests for auto-retry
         const pendingAuthRequests = new Map();
 
-        // Clean up old pending requests (older than 10 minutes)
+        // Clean up old pending requests every minute
         function cleanupOldPendingRequests() {
             const tenMinutesAgo = Date.now() - (10 * 60 * 1000);
             
@@ -1436,6 +1568,53 @@
                     pendingAuthRequests.delete(messageId);
                 }
             }
+        }
+        
+        // Show consent popup and return user's choice
+        function showConsentPopup(toolName, requiredScope) {
+            return new Promise((resolve) => {
+                // Show consent dialog
+                const consentDialog = document.getElementById('consentDialog');
+                const consentMessage = document.getElementById('consentMessage');
+                
+                consentMessage.textContent = `Grant permission to use ${toolName} with scope "${requiredScope}"?`;
+                consentDialog.style.display = 'block';
+                
+                // Handle approval
+                function approveConsent() {
+                    console.log("User approved consent for:", toolName);
+                    consentDialog.style.display = 'none';
+                    
+                    // Clean up event listeners
+                    const yesButton = document.getElementById('consentYes');
+                    const noButton = document.getElementById('consentNo');
+                    yesButton.onclick = null;
+                    noButton.onclick = null;
+                    
+                    resolve(true);
+                }
+                
+                // Handle denial
+                function denyConsent() {
+                    console.log("User denied consent for:", toolName);
+                    consentDialog.style.display = 'none';
+                    
+                    // Clean up event listeners
+                    const yesButton = document.getElementById('consentYes');
+                    const noButton = document.getElementById('consentNo');
+                    yesButton.onclick = null;
+                    noButton.onclick = null;
+                    
+                    resolve(false);
+                }
+                
+                // Set up event listeners
+                const yesButton = document.getElementById('consentYes');
+                const noButton = document.getElementById('consentNo');
+                
+                yesButton.onclick = approveConsent;
+                noButton.onclick = denyConsent;
+            });
         }
 
         // Token update checking with auto-retry

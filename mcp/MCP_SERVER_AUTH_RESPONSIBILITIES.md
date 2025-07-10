@@ -247,7 +247,7 @@ def validate_jwt_token(authorization_header: str) -> dict:
         if payload.get('aud') != MCP_SERVER_URI:
             raise AudienceError("Token not intended for this server")
         
-        return {
+    return {
             'user_id': payload.get('user_id'),
             'email': payload.get('email'),
             'scopes': payload.get('scopes', []),
@@ -324,7 +324,7 @@ class MCPError:
         self.data = data or {}
     
     def to_dict(self):
-        return {
+    return {
             "error": {
                 "code": self.code,
                 "message": self.message,
@@ -400,7 +400,7 @@ async def upgrade_scope(user_session: str, requested_scopes: List[str]) -> dict:
     Handle scope upgrade requests
     """
     user = get_user_from_session(user_session)
-    
+
     # Check approval policy
     approval_result = await evaluate_approval_policy(user.email, requested_scopes)
     
