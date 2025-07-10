@@ -171,59 +171,90 @@ class AuthChatAgent(ChatAgent):
             return
             
         try:
-            # Parse the result content as JSON to check for auth errors
-            content_data = None
+            # First, try to extract text content for FastMCP error format parsing
+            text_content = None
             
             if isinstance(result.content, str):
-                try:
-                    content_data = json.loads(result.content)
-                except json.JSONDecodeError:
-                    logger.info(f"🔍 Could not parse string content as JSON for {tool_name}")
-                    return
-            elif isinstance(result.content, dict):
-                content_data = result.content
-                logger.info(f"🔍 Using dict content for {tool_name}")
+                text_content = result.content
             elif isinstance(result.content, list):
                 # Handle list of TextContentItem objects (common in Llama Stack)
                 logger.info(f"🔍 Processing list content for {tool_name}")
                 for item in result.content:
                     if hasattr(item, 'text'):
-                        try:
-                            content_data = json.loads(item.text)
-                            logger.info(f"🔍 Successfully parsed TextContentItem for {tool_name}: {content_data}")
-                            break  # Use first parseable JSON content
-                        except json.JSONDecodeError:
-                            continue
-                if not content_data:
-                    logger.info(f"🔍 No parseable JSON content found in list for {tool_name}")
+                        text_content = item.text
+                        break  # Use first text content
+                if not text_content:
+                    logger.info(f"🔍 No text content found in list for {tool_name}")
                     return
             else:
                 logger.info(f"🔍 Unknown content type for {tool_name}: {type(result.content)}")
                 return
+            
+            # Check for FastMCP authorization errors using text parsing
+            if text_content and self._is_authorization_error(text_content):
+                logger.info(f"🔐 Detected FastMCP authorization error for {tool_name}")
+                error_details = self._extract_authorization_error_details(text_content)
                 
-            # Check for insufficient scope error (HTTP 403)
-            if content_data.get("error_type") == "insufficient_scope":
-                logger.info(f"🔐 Detected insufficient_scope error for {tool_name}")
-                required_scope = content_data.get("required_scope", tool_name)
-                current_scopes = content_data.get("current_scopes", [])
+                if error_details.get("error_type") == "insufficient_scope":
+                    logger.info(f"🔐 Detected insufficient_scope error for {tool_name}")
+                    required_scope = error_details.get("required_scope", tool_name)
+                    current_scopes = []  # FastMCP errors don't include current scopes
+                    
+                    raise InsufficientScopeError(
+                        tool_name=tool_name,
+                        required_scope=required_scope,
+                        mcp_server_url=mcp_server_url,
+                        current_scopes=current_scopes
+                    )
+                else:
+                    logger.info(f"🚨 Detected authorization error for {tool_name} - RAISING AuthorizationError")
+                    raise AuthorizationError(
+                        tool_name=tool_name,
+                        mcp_server_url=mcp_server_url,
+                        message=f"Tool '{tool_name}' requires authentication: {text_content}"
+                    )
+            
+            # Fallback: Try to parse as JSON for legacy error formats
+            content_data = None
+            try:
+                if isinstance(result.content, str):
+                    content_data = json.loads(result.content)
+                elif isinstance(result.content, dict):
+                    content_data = result.content
+                elif isinstance(result.content, list):
+                    for item in result.content:
+                        if hasattr(item, 'text'):
+                            try:
+                                content_data = json.loads(item.text)
+                                break
+                            except json.JSONDecodeError:
+                                continue
                 
-                raise InsufficientScopeError(
-                    tool_name=tool_name,
-                    required_scope=required_scope,
-                    mcp_server_url=mcp_server_url,
-                    current_scopes=current_scopes
-                )
+                if content_data:
+                    # Check for legacy structured error formats
+                    if content_data.get("error_type") == "insufficient_scope":
+                        logger.info(f"🔐 Detected legacy insufficient_scope error for {tool_name}")
+                        required_scope = content_data.get("required_scope", tool_name)
+                        current_scopes = content_data.get("current_scopes", [])
+                        
+                        raise InsufficientScopeError(
+                            tool_name=tool_name,
+                            required_scope=required_scope,
+                            mcp_server_url=mcp_server_url,
+                            current_scopes=current_scopes
+                        )
+                    elif content_data.get("error_type") == "missing_authentication":
+                        logger.info(f"🚨 Detected legacy missing_authentication error for {tool_name}")
+                        raise AuthorizationError(
+                            tool_name=tool_name,
+                            mcp_server_url=mcp_server_url,
+                            message=f"Tool '{tool_name}' requires authentication but no valid token was provided"
+                        )
                 
-            # Check for missing authentication error (HTTP 401)  
-            elif content_data.get("error_type") == "missing_authentication":
-                logger.info(f"🚨 Detected missing_authentication error for {tool_name} - RAISING AuthorizationError")
-                raise AuthorizationError(
-                    tool_name=tool_name,
-                    mcp_server_url=mcp_server_url,
-                    message=f"Tool '{tool_name}' requires authentication but no valid token was provided"
-                )
-            else:
-                logger.info(f"🔍 No auth error detected for {tool_name}, error_type: {content_data.get('error_type')}")
+            except json.JSONDecodeError:
+                pass  # Not JSON, that's fine
+            
+            logger.info(f"🔍 No auth error detected for {tool_name}")
                 
         except (InsufficientScopeError, AuthorizationError):
             # Re-raise auth errors
@@ -232,6 +263,86 @@ class AuthChatAgent(ChatAgent):
         except Exception as e:
             # Log but don't raise other parsing errors
             logger.debug(f"Could not parse tool result for auth errors: {e}")
+    
+    def _is_authorization_error(self, error_message: str) -> bool:
+        """Check if error message indicates an authorization issue"""
+        error_lower = error_message.lower()
+        
+        authorization_indicators = [
+            "authorizationerror",
+            "authorization required",
+            "authorization failed",
+            "insufficientscopeerror", 
+            "insufficient scope",
+            "access denied",
+            "unauthorized",
+            "permission denied",
+            "forbidden",
+            "401",
+            "403"
+        ]
+        
+        return any(indicator in error_lower for indicator in authorization_indicators)
+    
+    def _extract_authorization_error_details(self, error_message: str) -> dict:
+        """Extract details from authorization error messages"""
+        import re
+        import os
+        
+        error_lower = error_message.lower()
+        
+        # Default values
+        tool_name = "unknown_tool"
+        required_scope = "execute_command"  # Most common restricted scope
+        error_type = "authorization"
+        approval_status = "unknown"
+        approval_requested = False
+        mcp_server_url = None
+        auth_server_url = None
+        
+        # Check if this is the new FastMCP AuthorizationError with scope details
+        # Format: "Authorization failed: Access denied: Tool 'list_files' requires scope 'list_files' but only scopes [] are available"
+        if ("AuthorizationError" in error_message or "Authorization failed" in error_message) and "requires scope" in error_message:
+            error_type = "insufficient_scope"
+            approval_requested = True  # This is scope-related, needs token exchange
+            
+            # Extract tool name from the new FastMCP format
+            # Pattern: "Tool 'tool_name' requires scope"
+            tool_match = re.search(r"Tool ['\"]?(\w+)['\"]?\s+requires scope", error_message)
+            if tool_match:
+                tool_name = tool_match.group(1)
+            
+            # Extract required scope from the new FastMCP format  
+            # Pattern: "requires scope 'scope_name'"
+            scope_match = re.search(r"requires scope ['\"]?([^'\"]+)['\"]?", error_message)
+            if scope_match:
+                required_scope = scope_match.group(1)
+            
+            # For FastMCP errors, we need to determine the MCP server URL
+            # Since it's not in the error message, we'll use environment variable or default
+            mcp_server_url = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+            
+            return {
+                "error_type": error_type,
+                "tool_name": tool_name,
+                "required_scope": required_scope,
+                "mcp_server_url": mcp_server_url,
+                "auth_server_url": None,  # Will be discovered by chat app
+                "original_error": error_message,
+                "approval_requested": approval_requested,
+                "approval_status": "pending_token_exchange"
+            }
+        
+        return {
+            "error_type": error_type,
+            "tool_name": tool_name,
+            "required_scope": required_scope,
+            "mcp_server_url": mcp_server_url,
+            "auth_server_url": auth_server_url,
+            "original_error": error_message,
+            "approval_requested": approval_requested,
+            "approval_status": approval_status
+        }
 
     async def execute_tool_call_maybe(
             self,
@@ -265,8 +376,6 @@ class AuthChatAgent(ChatAgent):
             result = await self.tool_runtime_api.invoke_tool(
                     tool_name=tool_name_str,
                     kwargs={
-                        "session_id": session_id,
-                        # get the arguments generated by the model and augment with toolgroup arg overrides for the agent
                         **(tool_call.arguments if isinstance(tool_call.arguments, dict) else {}),
                         **self.tool_name_to_args.get(tool_name_str, {}),
                         },

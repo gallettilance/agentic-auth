@@ -301,62 +301,39 @@ def get_base_mcp_url(mcp_server_url: str) -> str:
     return mcp_server_url
 
 def get_mcp_tokens_for_user(user_email: str) -> dict:
-    """Get MCP tokens for a user from session or cache"""
-    # Try session first
+    """Get MCP tokens for a user from auth server database"""
     try:
-        session_tokens = session.get('mcp_tokens', {})
-        if session_tokens:
-            logger.info(f"🔐 Found {len(session_tokens)} MCP tokens in session for {user_email}")
-            return session_tokens
-    except RuntimeError:
-        # Not in request context
-        pass
-    
-    # Fall back to cache
-    cache_tokens = mcp_token_cache.get(user_email, {})
-    if cache_tokens:
-        logger.info(f"🔐 Found {len(cache_tokens)} MCP tokens in cache for {user_email}")
-    else:
-        logger.info(f"🔐 No MCP tokens found for {user_email}")
-    
-    return cache_tokens
+        import httpx
+        # Get tokens from auth server database
+        response = httpx.get(
+            f"{AUTH_SERVER_URL}/api/user-mcp-tokens",
+            params={"user_email": user_email},
+            timeout=5.0
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                tokens = result.get("tokens", {})
+                logger.info(f"🔐 Found {len(tokens)} MCP tokens for {user_email} from auth server")
+                return tokens
+            else:
+                logger.warning(f"⚠️ Failed to get MCP tokens: {result.get('error', 'Unknown error')}")
+                return {}
+        else:
+            logger.error(f"❌ Failed to retrieve MCP tokens: {response.status_code}")
+            return {}
+            
+    except Exception as e:
+        logger.error(f"❌ Error retrieving MCP tokens for {user_email}: {e}")
+        return {}
 
 def store_mcp_token_for_user(user_email: str, server_url: str, token: str):
-    """Store MCP token for a user in both session and cache"""
-    # Always use base URL as key (strip /sse if present)
-    base_server_url = get_base_mcp_url(server_url)
-    
-    # Store in session if possible
-    try:
-        if 'mcp_tokens' not in session:
-            session['mcp_tokens'] = {}
-        session['mcp_tokens'][base_server_url] = token
-        logger.info(f"✅ Stored MCP token in session for {user_email} -> {base_server_url}")
-        
-        # Also store the latest MCP token in a cookie for admin dashboard access
-        # Note: This is only done for the primary MCP server configured in environment
-        primary_mcp_server = os.getenv('MCP_SERVER_URL')
-        if primary_mcp_server and base_server_url == primary_mcp_server:
-            from flask import make_response, g
-            
-            # Check if we're in a request context that can set cookies
-            try:
-                # Store in a thread-local variable to be set as cookie in the response
-                if not hasattr(g, 'mcp_token_to_set'):
-                    g.mcp_token_to_set = token
-                    logger.info(f"✅ Marked MCP token for cookie storage: {token[:20]}...")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not mark MCP token for cookie: {e}")
-                
-    except RuntimeError:
-        # Not in request context
-        logger.info(f"⚠️ Could not store MCP token in session (no request context)")
-    
-    # Always store in cache as backup
-    if user_email not in mcp_token_cache:
-        mcp_token_cache[user_email] = {}
-    mcp_token_cache[user_email][base_server_url] = token
-    logger.info(f"✅ Stored MCP token in cache for {user_email} -> {base_server_url}")
+    """Store MCP token for a user in auth server database"""
+    # Note: This function is now primarily for backward compatibility
+    # MCP tokens are generated and stored during OAuth callback in the auth server
+    # But we still provide this for any edge cases that might call it
+    logger.info(f"✅ MCP token storage request for {user_email} -> {server_url} (tokens now stored during OAuth)")
 
 if __name__ == '__main__':
     logger.info("🚀 Starting Chat UI Frontend...")

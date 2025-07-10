@@ -73,6 +73,8 @@ def create_approval_request(
         logger.info(f"📝 Storing resource URI in approval request: {resource_uri}")
     
     # Create approval request
+    import time
+    now = time.time()
     approval_request = ApprovalRequest(
         request_id=request_id,
         user_email=user_email,
@@ -81,8 +83,8 @@ def create_approval_request(
         required_scope=required_scope,
         risk_level=risk_enum,
         justification=justification,
-        requested_at=datetime.utcnow(),
-        expires_at=datetime.utcnow() + timedelta(hours=24),  # 24 hour expiry
+        requested_at=datetime.fromtimestamp(now),
+        expires_at=datetime.fromtimestamp(now + 24*3600),  # 24 hour expiry
         status=ApprovalStatus.PENDING,
         metadata=metadata if metadata else None
     )
@@ -141,9 +143,10 @@ def approve_request(request_id: str, admin_email: str) -> bool:
             return False
         
         # Update request status
+        import time
         request.status = ApprovalStatus.APPROVED
         request.approved_by = admin_email
-        request.approved_at = datetime.utcnow()
+        request.approved_at = datetime.fromtimestamp(time.time())
         
         # Update in database
         auth_db.update_approval_request(request)
@@ -197,9 +200,10 @@ def deny_request(request_id: str, admin_email: str, reason: str) -> bool:
             return False
         
         # Update request status
+        import time
         request.status = ApprovalStatus.DENIED
         request.denied_by = admin_email
-        request.denied_at = datetime.utcnow()
+        request.denied_at = datetime.fromtimestamp(time.time())
         request.denial_reason = reason
         
         # Update in database

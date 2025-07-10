@@ -21,6 +21,8 @@ sessions: Dict[str, TokenPayload] = {}
 COOKIE_NAME = "auth_session"
 COOKIE_MAX_AGE = 3600  # 1 hour
 
+
+
 def create_session(user_data: TokenPayload) -> str:
     """Create a new session for the user (matching original implementation)"""
     session_id = secrets.token_urlsafe(32)
@@ -47,10 +49,27 @@ def verify_jwt_token(authorization: Optional[str] = Header(default=None)) -> Opt
     try:
         key = get_jwt_key_for_verification()
         algorithm = get_jwt_algorithm()
-        payload = jwt.decode(token, key, algorithms=[algorithm])
+        
+        # Debug: Check token timestamps
+        try:
+            import time
+            unverified_payload = jwt.decode(token, options={"verify_signature": False})
+            iat = unverified_payload.get('iat', 0)
+            now = time.time()
+            logger.info(f"🕐 JWT Debug - iat: {iat}, now: {now}, diff: {now - iat} seconds")
+        except Exception as debug_e:
+            logger.warning(f"JWT debug failed: {debug_e}")
+        
+        # Add leeway to account for clock skew between systems
+        logger.info(f"🔍 Attempting JWT decode with 30-second leeway")
+        payload = jwt.decode(token, key, algorithms=[algorithm], leeway=timedelta(seconds=30))  # type: ignore
+        logger.info(f"✅ JWT validation successful for {payload.get('email', 'unknown')}")
         return TokenPayload(**payload)
     except (InvalidSignatureError, ExpiredSignatureError, DecodeError, InvalidAudienceError, InvalidIssuerError) as e:
-        logger.debug(f"JWT validation failed: {e}")
+        logger.error(f"❌ JWT validation failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Unexpected JWT validation error: {e}")
         return None
 
 def verify_user_auth(
@@ -111,11 +130,12 @@ def verify_jwt_token_direct(authorization) -> Optional[TokenPayload]:
         
         token = auth_value.split(" ")[1]
         
-        # Decode and verify token
+        # Decode and verify token with leeway for clock skew
         payload = jwt.decode(
             token,
-            get_jwt_key_for_verification(),
-            algorithms=[get_jwt_algorithm()]
+            get_jwt_key_for_verification(),  # type: ignore
+            algorithms=[get_jwt_algorithm()],
+            leeway=timedelta(seconds=30)
         )
         
         # Create TokenPayload from decoded data

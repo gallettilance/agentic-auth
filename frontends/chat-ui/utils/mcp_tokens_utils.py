@@ -22,12 +22,32 @@ def get_base_mcp_url(mcp_server_url: str) -> str:
     return mcp_server_url
 
 def get_mcp_tokens_for_user_direct(user_email: str) -> dict:
-    """Get MCP tokens for user (direct implementation)"""
-    # Import helper function from main app
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from app import get_mcp_tokens_for_user
-    
-    return get_mcp_tokens_for_user(user_email)
+    """Get MCP tokens for user from auth server database"""
+    try:
+        # Get tokens from auth server database via API
+        # This is better than local storage since tokens are now generated during OAuth
+        response = httpx.get(
+            f"{AUTH_SERVER_URL}/api/user-mcp-tokens",
+            params={"user_email": user_email},
+            timeout=5.0
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                tokens = result.get("tokens", {})
+                logger.info(f"🔐 Retrieved {len(tokens)} MCP tokens for {user_email} from auth server")
+                return tokens
+            else:
+                logger.warning(f"⚠️ Failed to get MCP tokens: {result.get('error', 'Unknown error')}")
+                return {}
+        else:
+            logger.error(f"❌ Failed to retrieve MCP tokens: {response.status_code}")
+            return {}
+            
+    except Exception as e:
+        logger.error(f"❌ Error retrieving MCP tokens for {user_email}: {e}")
+        return {}
 
 def store_mcp_token_for_user_direct(user_email: str, server_url: str, token: str):
     """Store MCP token for user (direct implementation)"""
@@ -37,8 +57,65 @@ def store_mcp_token_for_user_direct(user_email: str, server_url: str, token: str
     
     return store_mcp_token_for_user(user_email, server_url, token)
 
+def generate_initial_no_scope_token(user_email: str, bearer_token: str) -> bool:
+    """Generate initial no-scope token for MCP server access"""
+    logger.info(f"🎫 === generate_initial_no_scope_token START for {user_email} ===")
+    
+    try:
+        # Check if user already has MCP tokens
+        mcp_tokens = get_mcp_tokens_for_user_direct(user_email)
+        if mcp_tokens:
+            logger.info(f"🎫 User {user_email} already has MCP tokens, skipping generation")
+            return True
+        
+        mcp_server_url = "http://localhost:8001"
+        logger.info(f"🎫 Generating no-scope token for MCP server: {mcp_server_url}")
+        
+        # Make request to auth server to generate no-scope token
+        response = httpx.post(
+            f"{AUTH_SERVER_URL}/api/initial-token",
+            json={
+                "resource": mcp_server_url,
+                "scopes": []  # No scopes - empty token
+            },
+            headers={
+                "Authorization": f"Bearer {bearer_token}",
+                "Content-Type": "application/json"
+            },
+            timeout=5.0
+        )
+        
+        logger.info(f"🔗 Auth server response: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"🔗 Auth server result: {result}")
+            
+            if result.get("success") and result.get("token"):
+                no_scope_token = result["token"]
+                logger.info(f"✅ Generated initial no-scope token for {user_email}: {no_scope_token[:20]}...")
+                
+                # Store token for the user
+                store_mcp_token_for_user_direct(user_email, mcp_server_url, no_scope_token)
+                logger.info(f"🔐 Stored no-scope token for {user_email} -> {mcp_server_url}")
+                
+                logger.info(f"🎫 === generate_initial_no_scope_token END for {user_email} (SUCCESS) ===")
+                return True
+            else:
+                logger.warning(f"⚠️ Failed to generate no-scope token: {result}")
+                return False
+        else:
+            logger.warning(f"⚠️ No-scope token request failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error generating no-scope token for {user_email}: {e}")
+        return False
+
 def prepare_mcp_headers_for_user(user_email: str) -> dict:
     """Prepare MCP authentication headers for a specific user"""
+    logger.info(f"🔍 === prepare_mcp_headers_for_user START for {user_email} ===")
+    
     mcp_tokens = get_mcp_tokens_for_user_direct(user_email)
     
     # DEBUG: Log what tokens we found
@@ -49,6 +126,8 @@ def prepare_mcp_headers_for_user(user_email: str) -> dict:
     
     mcp_headers = {}
     for mcp_server_url, mcp_token in mcp_tokens.items():
+        logger.info(f"🔍 Processing token for {mcp_server_url}: {mcp_token[:20] if mcp_token else 'NONE'}...")
+        
         if mcp_token and mcp_token != "NO_TOKEN_YET":
             # Convert base URL to full MCP endpoint URL for Llama Stack
             # Llama Stack expects the full endpoint URL including /sse
@@ -59,18 +138,25 @@ def prepare_mcp_headers_for_user(user_email: str) -> dict:
             mcp_headers[mcp_endpoint_url] = {
                 "Authorization": f"Bearer {mcp_token}"
             }
-            logger.info(f"🔐 Using MCP token for {user_email} -> {mcp_endpoint_url}: {mcp_token[:20]}...")
+            logger.info(f"🔐 Added MCP header for {user_email} -> {mcp_endpoint_url}: {mcp_token[:20]}...")
+    
+    logger.info(f"🔍 Final mcp_headers: {list(mcp_headers.keys())}")
     
     if mcp_headers:
         logger.info(f"🔐 Configured MCP headers for {user_email}: {len(mcp_headers)} servers")
         logger.info(f"🔍 DEBUG: MCP header endpoints: {list(mcp_headers.keys())}")
-        return {
+        
+        result = {
             "X-LlamaStack-Provider-Data": json.dumps({
                 "mcp_headers": mcp_headers
             })
         }
+        logger.info(f"🔍 Returning headers: {result}")
+        logger.info(f"🔍 === prepare_mcp_headers_for_user END for {user_email} ===")
+        return result
     else:
         logger.info(f"🔐 No MCP tokens for {user_email} - agent will call MCP tools without auth")
+        logger.info(f"🔍 === prepare_mcp_headers_for_user END for {user_email} (no headers) ===")
         return {}
 
 async def request_scope_upgrade(required_scope: str, user_token: str, auth_cookies: dict = {}, auth_server_url: str | None = None, resource: str | None = None, current_token: str | None = None) -> dict:

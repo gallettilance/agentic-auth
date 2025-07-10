@@ -243,6 +243,20 @@ class AuthDatabase:
                 );
                 
                 CREATE INDEX IF NOT EXISTS idx_pending_token_updates_user ON pending_token_updates (user_email);
+                
+                -- MCP tokens table
+                CREATE TABLE IF NOT EXISTS mcp_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_email TEXT NOT NULL,
+                    server_url TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_email) REFERENCES users (email),
+                    UNIQUE (user_email, server_url)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens (user_email);
             """)
             
             # Initialize default data
@@ -1035,6 +1049,37 @@ class AuthDatabase:
         except Exception as e:
             logger.error(f"❌ Failed to get all scopes for {user_email}: {e}")
             return self.get_user_approved_scopes(user_email)  # Fallback to manually approved only
+
+    def store_mcp_token(self, user_email: str, server_url: str, token: str) -> bool:
+        """Store MCP token for a user"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO mcp_tokens (user_email, server_url, token, updated_at)
+                    VALUES (?, ?, ?, datetime('now'))
+                """, (user_email, server_url, token))
+                
+                logger.info(f"🔐 Stored MCP token for {user_email} -> {server_url}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to store MCP token for {user_email}: {e}")
+            return False
+
+    def get_mcp_tokens(self, user_email: str) -> Dict[str, str]:
+        """Get all MCP tokens for a user"""
+        try:
+            with self.get_connection() as conn:
+                tokens = conn.execute("""
+                    SELECT server_url, token FROM mcp_tokens 
+                    WHERE user_email = ?
+                """, (user_email,)).fetchall()
+                
+                return {token['server_url']: token['token'] for token in tokens}
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get MCP tokens for {user_email}: {e}")
+            return {}
 
 # Global database instance
 auth_db = AuthDatabase()

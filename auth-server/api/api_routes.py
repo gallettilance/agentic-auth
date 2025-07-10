@@ -196,6 +196,13 @@ async def upgrade_scope(
             if audience:
                 new_token = generate_token(user, new_scopes, audience)
                 logger.info(f"✅ Generated new token for {user.email} with scopes: {new_scopes}, audience: {audience}")
+                
+                # CRITICAL FIX: Store the new token back in the database
+                success = auth_db.store_mcp_token(user.email, audience, new_token)
+                if success:
+                    logger.info(f"🔐 Updated stored MCP token for {user.email} -> {audience}")
+                else:
+                    logger.error(f"❌ Failed to store updated MCP token for {user.email} -> {audience}")
             else:
                 logger.warning("⚠️ No audience specified for token generation")
         
@@ -368,7 +375,15 @@ async def get_initial_token(
             token_scopes = []
         
         # Generate token for the specific resource with only approved scopes
+        logger.info(f"🎯 DEBUG: Token generation - resource: {resource}, audience: {resource}")
         token = generate_token(user, token_scopes, audience=resource)
+        
+        # Store the token in the database for future retrieval
+        success = auth_db.store_mcp_token(user.email, resource, token)
+        if success:
+            logger.info(f"🔐 Stored initial MCP token for {user.email} -> {resource}")
+        else:
+            logger.warning(f"⚠️ Failed to store initial MCP token for {user.email} -> {resource}")
         
         logger.info(f"✅ Generated initial token for {user.email} with approved scopes: {token_scopes}")
         
@@ -480,4 +495,23 @@ async def check_token_update(user: TokenPayload = Depends(verify_user_auth)):
         
     except Exception as e:
         logger.error(f"❌ Failed to check token update: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.get("/user-mcp-tokens")
+async def get_user_mcp_tokens(user_email: str):
+    """Get MCP tokens for a user"""
+    try:
+        # Get tokens from database
+        tokens = auth_db.get_mcp_tokens(user_email)
+        
+        logger.info(f"🔐 Retrieved {len(tokens)} MCP tokens for {user_email}")
+        
+        return {
+            "success": True,
+            "tokens": tokens,
+            "user_email": user_email
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get MCP tokens for {user_email}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error") 

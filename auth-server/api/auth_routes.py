@@ -118,17 +118,46 @@ async def oauth_callback(code: str, state: str):
                 logger.info(f"👤 EXISTING USER: {user_email} logged in - permissions reset to empty scope per RFC 8693")
             
             # Create session with EMPTY scope per RFC 8693 Token Exchange protocol
+            # Use a timestamp slightly in the past to account for clock skew
+            import time
+            now_timestamp = int(time.time())  # Always UTC
+            iat_timestamp = now_timestamp - 5  # 5 seconds in the past
+            exp_timestamp = now_timestamp + 3600  # 1 hour in the future
+            
+            logger.info(f"🕐 Token Generation Debug - now: {now_timestamp}, iat: {iat_timestamp}, exp: {exp_timestamp}")
+            logger.info(f"🕐 Time diff - iat is {now_timestamp - iat_timestamp} seconds in the past")
+            
             user_data = TokenPayload(
                 sub=user_email,
                 aud=SERVER_URI,
                 email=user_email,
                 scope="",  # Start with no permissions - RFC 8693 compliance
-                exp=int((datetime.utcnow() + timedelta(hours=1)).timestamp()),
-                iat=int(datetime.utcnow().timestamp()),
+                exp=exp_timestamp,
+                iat=iat_timestamp,  # 5 seconds in the past to prevent clock skew
                 iss=SERVER_URI
             )
             
-            logger.info(f"🔐 User token created with empty scope (RFC 8693 compliant): {user_email}")
+            logger.info(f"🔐 User session token created with empty scope (RFC 8693 compliant): {user_email}")
+            
+            # Generate MCP token immediately as well
+            mcp_server_url = "http://localhost:8001"
+            logger.info(f"🎫 Generating initial MCP token for {user_email} -> {mcp_server_url}")
+            
+            try:
+                from utils.jwt_utils import generate_token
+                mcp_token = generate_token(user_data, [], audience=mcp_server_url)
+                logger.info(f"✅ Generated MCP token for {user_email}: {mcp_token[:20]}...")
+                
+                # Store MCP token in database for the user
+                success = auth_db.store_mcp_token(user_email, mcp_server_url, mcp_token)
+                if success:
+                    logger.info(f"🔐 Stored MCP token for {user_email} -> {mcp_server_url}")
+                else:
+                    logger.error(f"❌ Failed to store MCP token for {user_email}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to generate MCP token for {user_email}: {e}")
+                # Continue with session creation even if MCP token fails
             
             session_id = create_session(user_data)
             
@@ -145,7 +174,7 @@ async def oauth_callback(code: str, state: str):
                 oauth_callback.auth_codes[auth_code] = {
                     'user_data': user_data,
                     'session_id': session_id,
-                    'created_at': datetime.utcnow()
+                    'created_at': now_timestamp
                 }
                 
                 # Redirect back to chat UI with authorization code
@@ -218,7 +247,8 @@ async def oauth_token(
         auth_code_data = oauth_callback.auth_codes[code]
         
         # Check if code is expired (5 minutes)
-        if (datetime.utcnow() - auth_code_data['created_at']).total_seconds() > 300:
+        import time
+        if (time.time() - auth_code_data['created_at']) > 300:
             del oauth_callback.auth_codes[code]
             raise HTTPException(status_code=400, detail="Authorization code expired")
         

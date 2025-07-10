@@ -131,14 +131,22 @@ def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str
     # Use provided audience or default to server URI
     token_audience = audience or SERVER_URI
     
+    logger.info(f"🎯 DEBUG: JWT generate_token - provided audience: {audience}, final audience: {token_audience}")
+    
+    # Always generate fresh timestamps in UTC to avoid timezone issues
+    import time
+    now = int(time.time())
+    iat = now - 5  # 5 seconds in the past to prevent clock skew
+    exp = now + 3600  # 1 hour in the future
+    
     # Create payload
     payload = {
         'sub': user.sub,
         'aud': token_audience,
         'email': user.email,
         'scope': ' '.join(scopes),
-        'exp': user.exp,
-        'iat': user.iat,
+        'exp': exp,
+        'iat': iat,
         'iss': user.iss
     }
     
@@ -150,7 +158,7 @@ def generate_token(user: TokenPayload, scopes: List[str], audience: Optional[str
     # Generate token
     token = jwt.encode(
         payload,
-        private_key,
+        private_key,  # type: ignore
         algorithm=get_jwt_algorithm(),
         headers=headers
     )
