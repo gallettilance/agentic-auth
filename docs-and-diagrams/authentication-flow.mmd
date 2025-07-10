@@ -1,0 +1,110 @@
+sequenceDiagram
+    participant U as User
+    participant CUI as Chat UI<br/>(Port 5001)
+    participant AS as Auth Server<br/>(Port 8002)
+    participant LS as Llama Stack<br/>(Port 8321)
+    participant AA as Auth Agent<br/>(in Llama Stack)
+    participant MCP as MCP Server<br/>(Port 8001)
+    participant GA as Google OAuth
+
+    Note over U,GA: 🔐 Initial Authentication & Token Generation
+
+    U->>CUI: Access chat application
+    CUI->>AS: Check authentication status
+    AS-->>CUI: 401 Unauthorized
+    CUI-->>U: Show login page
+
+    U->>CUI: Click "Login with Google"
+    CUI->>AS: Initiate OAuth flow
+    AS->>GA: Redirect to Google OAuth
+    GA-->>U: Google login page
+    U->>GA: Enter credentials
+    GA->>AS: Return with authorization code
+    AS->>GA: Exchange code for user profile
+    GA-->>AS: User profile data
+    AS->>AS: Generate session token
+    AS->>AS: Generate MCP token (empty scopes initially)
+    AS->>AS: Store tokens in database
+    AS-->>CUI: Return session + MCP tokens
+    CUI->>CUI: Store tokens in session
+    CUI-->>U: Show chat interface
+
+    Note over U,MCP: 💬 First Tool Request - No Access Initially
+
+    U->>CUI: Send message: "List files in /tmp"
+    CUI->>LS: POST /create_turn with user message
+    
+    Note over LS,MCP: 🚫 Llama Stack Has No Direct MCP Access
+    LS->>AA: Process user message
+    AA->>AA: Analyze request - needs list_files tool
+    AA->>AA: ❌ NO MCP token available yet
+    AA-->>LS: Cannot access MCP server
+    LS-->>CUI: Stream error: "Tool access not available"
+    CUI-->>U: Show error message
+
+    Note over U,MCP: 🔑 Token Injection via create_turn()
+
+    U->>CUI: Retry same request
+    CUI->>CUI: Retrieve MCP token from session
+    CUI->>LS: POST /create_turn with message + Bearer token
+    
+    Note over LS,MCP: ✅ Token Now Available to Llama Stack
+    LS->>AA: Process message with token context
+    AA->>AA: Token available - can access MCP server
+    AA->>MCP: Call list_files tool with JWT token
+    
+    Note over MCP,MCP: 🔍 MCP Server Token Validation
+    MCP->>MCP: Validate JWT token signature
+    MCP->>MCP: Check token expiry
+    MCP->>MCP: Verify required scopes for list_files
+    
+    alt Token valid with sufficient scopes
+        MCP->>MCP: Execute list_files tool
+        MCP-->>AA: Return file list results
+        AA-->>LS: Tool execution successful
+        LS-->>CUI: Stream successful response
+        CUI-->>U: Display file listing
+    else Token invalid or insufficient scopes
+        MCP-->>AA: Return authorization error
+        AA-->>LS: Tool execution failed
+        LS-->>CUI: Stream error response
+        CUI-->>U: Show "Authorization required" message
+    end
+
+    Note over U,MCP: 🔄 Subsequent Requests - Token Persists
+
+    U->>CUI: Send another message: "Create new file"
+    CUI->>LS: POST /create_turn with Bearer token
+    LS->>AA: Process with token context
+    AA->>MCP: Call create_file tool with JWT token
+    MCP->>MCP: Validate token and scopes
+    MCP-->>AA: Execute or deny based on token
+    AA-->>LS: Return result
+    LS-->>CUI: Stream response
+    CUI-->>U: Display result
+
+    Note over U,GA: 🔐 Key Authentication Points
+
+    rect rgb(255, 240, 240)
+        Note over LS: Llama Stack Isolation
+        Note over LS: • No direct MCP credentials
+        Note over LS: • Relies on token injection
+        Note over LS: • Token passed via create_turn()
+        Note over LS: • No persistent token storage
+    end
+
+    rect rgb(240, 255, 240)
+        Note over CUI: Chat UI Token Management
+        Note over CUI: • Stores tokens from auth server
+        Note over CUI: • Injects token into each request
+        Note over CUI: • Handles token refresh
+        Note over CUI: • Manages session state
+    end
+
+    rect rgb(240, 240, 255)
+        Note over MCP: MCP Server Security
+        Note over MCP: • Validates every request
+        Note over MCP: • No trusted internal access
+        Note over MCP: • Scope-based authorization
+        Note over MCP: • Independent token validation
+    end 
