@@ -37,7 +37,7 @@ This system provides **secure, granular access control** for AI agents interacti
 
 ### **Prerequisites**
 ```bash
-# Python 3.11+ required
+# Python 3.12+ required
 python --version
 
 # Install dependencies
