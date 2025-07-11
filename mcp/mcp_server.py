@@ -48,36 +48,6 @@ logger.info(f"🏢 Expected Issuer: {AUTH_SERVER_URI}")
 logger.info(f"📝 Algorithm: RS256")
 logger.info(f"🎯 DEBUG: MCP server will ONLY accept tokens with audience='{SERVER_URI}'")
 
-# ============================================================================
-# DISCOVERY ENDPOINTS - OAuth Protected Resource Discovery
-# ============================================================================
-
-@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
-async def oauth_protected_resource(request):
-    """
-    OAuth Protected Resource Discovery endpoint (RFC 9728)
-    
-    Returns:
-        Dictionary containing OAuth protection metadata for this resource
-    """
-    logger.info("🔍 Discovery request: /.well-known/oauth-protected-resource")
-    
-    from fastapi.responses import JSONResponse
-    
-    return JSONResponse({
-        "resource": SERVER_URI,
-        "authorization_server": AUTH_SERVER_URI,
-        "jwks_uri": f"{AUTH_SERVER_URI}/.well-known/jwks.json",
-        "scopes_supported": [
-            "list_files",
-            "execute_command", 
-            "get_server_info",
-            "health_check",
-            "list_tool_scopes"
-        ],
-        "bearer_methods_supported": ["header"],
-        "resource_documentation": f"{SERVER_URI}/docs"
-    })
 
 # ============================================================================
 # MCP TOOLS - Using FastMCP's native required_scope parameter
