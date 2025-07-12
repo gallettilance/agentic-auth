@@ -29,3 +29,15 @@ KID = None  # Key ID for asymmetric mode - loaded from keys/kid.txt
 
 # Database path
 DB_PATH = os.getenv("AUTH_DB_PATH", "auth.db") 
+
+# Keycloak Configuration
+KEYCLOAK_HOST = os.getenv("KEYCLOAK_HOST", "https://localhost:8080")
+KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "master")
+KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "kubernetes")
+KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", "")
+
+# Kubernetes Configuration
+KUBE_API_SERVER = os.getenv("KUBE_API_SERVER", "https://localhost:6443")
+KUBE_CA_CERT = os.getenv("KUBE_CA_CERT", "") 
+
+JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret-key-change-in-production") 

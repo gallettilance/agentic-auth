@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from database import auth_db
 import httpx
 import jwt
+from auth.keycloak_bridge import convert_keycloak_to_jwt
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -257,3 +258,25 @@ async def oauth_token(
             "token_type": "Bearer",
             "expires_in": 3600
         } 
+
+@router.post("/keycloak/exchange")
+async def exchange_keycloak_token(request: Request):
+    """Exchange Keycloak OIDC token for internal JWT token"""
+    try:
+        body = await request.json()
+        keycloak_token = body.get("keycloak_token")
+        requested_scopes = body.get("scopes", [])
+        
+        if not keycloak_token:
+            raise HTTPException(status_code=400, detail="keycloak_token required")
+        
+        # Convert Keycloak token to internal JWT
+        jwt_token = convert_keycloak_to_jwt(keycloak_token, requested_scopes)
+        
+        return {
+            "access_token": jwt_token,
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) 

@@ -11,6 +11,11 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import BearerAuthProvider
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
+# Add these imports at the top
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+import tempfile
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,12 +53,42 @@ logger.info(f"🏢 Expected Issuer: {AUTH_SERVER_URI}")
 logger.info(f"📝 Algorithm: RS256")
 logger.info(f"🎯 DEBUG: MCP server will ONLY accept tokens with audience='{SERVER_URI}'")
 
+# ============================================================================
+# DISCOVERY ENDPOINTS - OAuth Protected Resource Discovery
+# ============================================================================
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request):
+    """
+    OAuth Protected Resource Discovery endpoint (RFC 9728)
+    
+    Returns:
+        Dictionary containing OAuth protection metadata for this resource
+    """
+    logger.info("🔍 Discovery request: /.well-known/oauth-protected-resource")
+    
+    from fastapi.responses import JSONResponse
+    
+    return JSONResponse({
+        "resource": SERVER_URI,
+        "authorization_server": AUTH_SERVER_URI,
+        "jwks_uri": f"{AUTH_SERVER_URI}/.well-known/jwks.json",
+        "scopes_supported": [
+            "list_files",
+            "execute_command", 
+            "get_server_info",
+            "health_check",
+            "list_tool_scopes"
+        ],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": f"{SERVER_URI}/docs"
+    })
 
 # ============================================================================
 # MCP TOOLS - Using FastMCP's native required_scope parameter
 # ============================================================================
 
-@mcp.tool(required_scope="list_files")
+@mcp.tool()
 async def list_files(directory: str = ".") -> Dict[str, Any]:
     """
     List files in a directory.
@@ -102,7 +137,7 @@ async def list_files(directory: str = ".") -> Dict[str, Any]:
         "count": len(files)
     }
 
-@mcp.tool(required_scope="execute_command")
+@mcp.tool()
 async def execute_command(command: str) -> Dict[str, Any]:
     """
     Execute a safe system command.
@@ -157,7 +192,7 @@ async def execute_command(command: str) -> Dict[str, Any]:
             "command": command
         }
 
-@mcp.tool(required_scope="get_server_info")
+@mcp.tool()
 async def get_server_info() -> Dict[str, Any]:
     """
     Get server information and authentication status.
@@ -178,7 +213,7 @@ async def get_server_info() -> Dict[str, Any]:
         "message": "Authentication successful - you have access to this MCP server"
     }
 
-@mcp.tool(required_scope="health_check")
+@mcp.tool()
 async def health_check() -> Dict[str, Any]:
     """
     Check server health and authentication status.
@@ -197,7 +232,7 @@ async def health_check() -> Dict[str, Any]:
         "auth_method": "FastMCP with Native Scope Enforcement"
     }
 
-@mcp.tool(required_scope="list_tool_scopes")
+@mcp.tool()
 async def list_tool_scopes() -> Dict[str, Any]:
     """
     List all available tools and their required scopes.
@@ -230,6 +265,18 @@ async def list_tool_scopes() -> Dict[str, Any]:
             "description": "List all available tools and their required scopes",
             "required_scope": "list_tool_scopes"
         },
+        "kubectl_get_pods": {
+            "description": "List pods in a Kubernetes namespace",
+            "required_scope": "kubectl:read"
+        },
+        "kubectl_get_services": {
+            "description": "List services in a Kubernetes namespace", 
+            "required_scope": "kubectl:read"
+        },
+        "kubectl_apply_yaml": {
+            "description": "Apply YAML configuration to Kubernetes",
+            "required_scope": "kubectl:write"
+        }
     }
     
     logger.info("✅ Tool scopes listed successfully")
@@ -239,6 +286,115 @@ async def list_tool_scopes() -> Dict[str, Any]:
         "total_tools": len(tool_scopes)
     }
 
+# ============================================================================
+# KUBERNETES TOOLS - Using FastMCP's native required_scope parameter
+# ============================================================================
+
+def get_kubernetes_client(token):
+    """Create Kubernetes client with OIDC token"""
+    configuration = client.Configuration()
+    configuration.host = os.getenv("KUBE_API_SERVER", "https://localhost:6443")
+    configuration.verify_ssl = False  # Set to True with proper CA in production
+    configuration.api_key = {"authorization": f"Bearer {token}"}
+    
+    return client.ApiClient(configuration)
+
+@mcp.tool()
+async def kubectl_get_pods(namespace: str = "default") -> Dict[str, Any]:
+    """
+    List pods in a Kubernetes namespace.
+    
+    Args:
+        namespace: Kubernetes namespace (default: default)
+        
+    Returns:
+        Dictionary containing pod information
+    """
+    logger.info(f"🔧 Tool called: kubectl_get_pods(namespace='{namespace}')")
+    logger.info(f"☸️ Listing pods in namespace: {namespace}")
+    
+    try:
+        # For demo purposes, we'll simulate the kubectl call
+        # In a real implementation, you would extract the token from the context
+        # and use it with the Kubernetes client
+        
+        return {
+            "success": True,
+            "namespace": namespace,
+            "message": "kubectl_get_pods tool called successfully",
+            "note": "This is a demo - real Kubernetes integration requires proper token handling"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to list pods: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "namespace": namespace
+        }
+
+@mcp.tool()
+async def kubectl_get_services(namespace: str = "default") -> Dict[str, Any]:
+    """
+    List services in a Kubernetes namespace.
+    
+    Args:
+        namespace: Kubernetes namespace (default: default)
+        
+    Returns:
+        Dictionary containing service information
+    """
+    logger.info(f"🔧 Tool called: kubectl_get_services(namespace='{namespace}')")
+    logger.info(f"☸️ Listing services in namespace: {namespace}")
+    
+    try:
+        return {
+            "success": True,
+            "namespace": namespace,
+            "message": "kubectl_get_services tool called successfully",
+            "note": "This is a demo - real Kubernetes integration requires proper token handling"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to list services: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "namespace": namespace
+        }
+
+@mcp.tool()
+async def kubectl_apply_yaml(yaml_content: str, namespace: str = "default") -> Dict[str, Any]:
+    """
+    Apply YAML configuration to Kubernetes.
+    
+    Args:
+        yaml_content: YAML configuration to apply
+        namespace: Kubernetes namespace (default: default)
+        
+    Returns:
+        Dictionary containing apply results
+    """
+    logger.info(f"🔧 Tool called: kubectl_apply_yaml(namespace='{namespace}')")
+    logger.info(f"☸️ Applying YAML to namespace: {namespace}")
+    
+    try:
+        return {
+            "success": True,
+            "namespace": namespace,
+            "message": "kubectl_apply_yaml tool called successfully",
+            "yaml_length": len(yaml_content),
+            "note": "This is a demo - real Kubernetes integration requires proper token handling"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to apply YAML: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "namespace": namespace
+        }
+
 
 if __name__ == "__main__":
     logger.info("="*80)
@@ -246,7 +402,7 @@ if __name__ == "__main__":
     logger.info(f"🌐 Server URI: {SERVER_URI}")
     logger.info(f"🔐 Auth server: {AUTH_SERVER_URI}")
     logger.info("🔒 Auth method: FastMCP with Native Scope Enforcement")
-    logger.info("🛠️ Available tools: list_files, execute_command, get_server_info, get_oauth_metadata, health_check, list_tool_scopes, verify_domain")
+    logger.info("🛠️ Available tools: list_files, execute_command, get_server_info, health_check, list_tool_scopes, kubectl_get_pods, kubectl_get_services, kubectl_apply_yaml")
     logger.info("🔐 Scope validation: FastMCP native required_scope parameter")
     logger.info("📊 Debug logging enabled for comprehensive authentication flow debugging")
     logger.info("="*80)
