@@ -38,9 +38,9 @@ else
     echo "   - Secret: ${JWT_SECRET:0:20}..."
 fi
 
-# Google OAuth (optional)
-export GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-export GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+# OAuth Configuration
+export OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+export OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
 
 echo ""
 echo "📋 Configuration:"
@@ -197,7 +197,7 @@ echo "🛑 To stop: Ctrl+C or run ./stop_demo.sh"
 echo ""
 
 echo "🎯 Demo Features:"
-echo "   • Google OAuth 2.0 integration"
+echo "   • OpenID Connect (OIDC) integration"
 echo "   • Database-backed user and permission management"
 echo "   • JWT token generation and validation"
 echo "   • MCP tool integration with scope-based authorization"
