@@ -277,9 +277,7 @@ class AuthChatAgent(ChatAgent):
             "access denied",
             "unauthorized",
             "permission denied",
-            "forbidden",
-            "401",
-            "403"
+            "forbidden"
         ]
         
         return any(indicator in error_lower for indicator in authorization_indicators)

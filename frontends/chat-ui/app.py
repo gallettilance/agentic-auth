@@ -42,8 +42,8 @@ app.config.update(
 )
 
 # Configuration - these will be moved to config files later
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID")
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")
 AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "http://localhost:8002")
 LLAMA_STACK_URL = os.getenv("LLAMA_STACK_URL", "http://localhost:8321")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:5001/callback")

@@ -16,8 +16,10 @@ auth_bp = Blueprint('auth', __name__)
 
 # Service URLs - will be moved to config later
 AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "http://localhost:8002")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+OIDC_ISSUER_URL = os.getenv("OIDC_ISSUER_URL")
+OIDC_DISCOVERY_URL = f"{OIDC_ISSUER_URL}/.well-known/openid-configuration"
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID")
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:5001/callback")
 
 def get_oauth_url():
@@ -30,7 +32,7 @@ def get_oauth_url():
         # Build OAuth URL
         oauth_url = f"{AUTH_SERVER_URL}/oauth/authorize"
         params = {
-            'client_id': GOOGLE_CLIENT_ID,
+            'client_id': OIDC_CLIENT_ID,
             'response_type': 'code',
             'scope': 'openid profile email',
             'redirect_uri': REDIRECT_URI,
@@ -106,8 +108,8 @@ async def exchange_code_for_token(code: str) -> dict:
                     'grant_type': 'authorization_code',
                     'code': code,
                     'redirect_uri': REDIRECT_URI,
-                    'client_id': GOOGLE_CLIENT_ID,
-                    'client_secret': GOOGLE_CLIENT_SECRET
+                    'client_id': OIDC_CLIENT_ID,
+                    'client_secret': OIDC_CLIENT_SECRET
                 },
                 headers={'Content-Type': 'application/x-www-form-urlencoded'},
                 timeout=10.0
@@ -149,11 +151,25 @@ async def exchange_code_for_token(code: str) -> dict:
         }
 
 async def get_user_info(access_token: str) -> dict:
-    """Get user info from Google"""
+    """Get user info from OIDC"""
     try:
         async with httpx.AsyncClient() as client:
+            response = await client.get(OIDC_DISCOVERY_URL)
+
+            if response.status_code == 200:
+                config_data = response.json()
+                userinfo_endpoint = config_data.get('userinfo_endpoint')
+                
+                if not userinfo_endpoint:
+                    logger.error("❌ Userinfo endpoint not found in OIDC config")
+                    return None
+            else:
+                logger.error(f"❌ Error getting OIDC Discovery Document")
+                return None
+
+        async with httpx.AsyncClient() as client:
             response = await client.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
+                userinfo_endpoint,
                 headers={'Authorization': f'Bearer {access_token}'},
                 timeout=10.0
             )

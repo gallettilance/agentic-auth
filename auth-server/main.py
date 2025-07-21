@@ -19,7 +19,7 @@ from config.settings import SERVER_NAME, SERVER_VERSION, SERVER_HOST, SERVER_POR
 
 # Import utilities
 from utils import jwt_utils
-from auth.oauth_utils import load_google_config
+from auth.oauth_utils import load_oidc_config
 from database import auth_db
 
 # Import route modules
@@ -74,10 +74,10 @@ async def startup_event():
         logger.error("❌ Failed to load JWT keys")
         sys.exit(1)
     
-    # Load Google OAuth configuration
-    logger.info("🔐 Loading Google OAuth configuration...")
-    if not await load_google_config():
-        logger.error("❌ Failed to load Google OAuth configuration")
+    # Load OIDC configuration
+    logger.info("🔐 Loading OIDC configuration...")
+    if not await load_oidc_config():
+        logger.error("❌ Failed to load OIDC configuration")
         sys.exit(1)
     
     # Initialize admin user if configured
@@ -114,7 +114,7 @@ async def startup_event():
                 logger.info("")
                 logger.info("📋 Next Steps:")
                 logger.info("1. Visit the login URL above")
-                logger.info(f"2. Sign in with Google using: {admin_email}")
+                logger.info(f"2. Sign in with OIDC using: {admin_email}")
                 logger.info("3. Access the admin dashboard to manage permissions")
                 logger.info("=" * 60)
             else:
