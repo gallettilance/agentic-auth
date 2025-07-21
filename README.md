@@ -1,13 +1,13 @@
 # 🔐 Authentication & Authorization System for AI Agents
 
-A comprehensive authentication and authorization system for AI agents with **Google OAuth**, **JWT tokens**, **scope-based permissions**, and **real-time approval workflows**. Built for secure MCP (Model Context Protocol) tool access with automatic permission escalation.
+A comprehensive authentication and authorization system for AI agents with **OIDC**, **JWT tokens**, **scope-based permissions**, and **real-time approval workflows**. Built for secure MCP (Model Context Protocol) tool access with automatic permission escalation.
 
 ## 🎯 **What This System Does**
 
-This system provides **secure, granular access control** for AI agents interacting with system resources. Users authenticate once via Google OAuth, then the system automatically manages permissions as AI agents request access to different tools and resources.
+This system provides **secure, granular access control** for AI agents interacting with system resources. Users authenticate once via OIDC, then the system automatically manages permissions as AI agents request access to different tools and resources.
 
 ### **Key Capabilities**
-- 🔐 **Google OAuth Authentication** - Secure login with Google accounts
+- 🔐 **OIDC Authentication** - Secure login using OIDC
 - 🎫 **JWT Token Management** - Automatic token generation and refresh
 - 🔧 **MCP Tool Integration** - Secure access to file system, commands, and APIs
 - 📋 **Dynamic Approval Workflows** - Auto-approve safe operations, require admin approval for risky ones
@@ -58,7 +58,7 @@ cp env.example .env
 # Edit .env file with your settings:
 # - ADMIN_EMAIL (required)
 # - OPENAI_API_KEY (required for AI agents)
-# - GOOGLE_CLIENT_ID/SECRET (required for Google OAuth)
+# - OIDC_CLIENT_ID/SECRET (required for OIDC)
 ```
 
 ### **Start the System**
@@ -83,11 +83,95 @@ cp env.example .env
 
 ⚠️ **Important**: `stop_demo.sh` will **force close Chrome** to clear authentication cookies. Save any important Chrome work before running this command.
 
-## 🔐 **Google OAuth Setup**
+## OIDC Provider
+
+Before running the demo, you need to set up an OIDC Provider (such as Keycloak or Google).
+
+### 🔐 **Keycloak**
+
+Before running the demo, you can use Keycloak as a OIDC provider. Follow these steps:
+
+#### **1. Create a new Realm**
+
+_Note_: This step is not required, but highly encouraged
+
+1. **Go to the Keycloak Administration Interface**
+2. **Click Manage Realms**
+3. **Click Create realm** or select an existing one
+  - Enter the name of the desired realm
+  - Click "Create"
+
+#### **2. Create Users**
+
+There must be at least one user created in the realm. Use the following steps to create a user and assign a password:
+
+1. **Ensure you are in the desired realm**
+2. **Click Users on the left hand navigation**
+3. **Click Add User**
+4. **Enter the following in the Create User page**
+  - Username
+  - Email
+  - First Name
+  - Last Name
+  - Email Verified (checked)
+  - Click "Create"
+5. **Set a password for the user**
+  - Click the "Credentials" tab
+  - Click "Set password"
+  - Enter and confirm the desired password
+  - Deselect "Temporary"
+  - Click "Save"
+
+#### **3. Create an OIDC Client**
+
+1. **Ensure you are in the desired realm**
+2. **Click Clients on the left hand navigation**
+3. **Click Create client**
+4. **Fill out the General Settings section**
+  - Client ID (such as `authentication-demo`)
+  - Click "Next"
+5. **Fill out the Capability Config section**
+  - Enable "Client Authentication"
+  - Click "Next"
+6. **Fill out the Login Settings section**
+   - Valid redirect URI's:
+     ```
+     http://localhost:8002/auth/callback
+     http://localhost:5001/callback
+     http://localhost:8003/callback
+     ```
+   - Click "Save"
+7. ***Obtain Client Secret**
+  - Click on "Credentials" tab
+  - Reveal or copy the secret next to "Client Secret"
+
+#### **4. Obtain OIDC Issuer URL**
+
+1. **Ensure you are in the desired realm**
+2. **Click Realm Settings on the left hand navigation**
+3. **Click the `OpenID Endpoint Configuration` link**
+4. **The OIDC Issuer can be found within the `issuer` property**
+
+#### **5. Update Environment Variables**
+
+Add your Keycloak OAuth credentials to your `.env` file:
+
+```bash
+# Required Keycloak OAuth credentials
+OIDC_ISSUER_URL="your-realm-oidc-issuer"
+OIDC_CLIENT_ID="your-client-id-here"
+OIDC_CLIENT_SECRET="your-client-secret-here"
+
+# Other required variables
+ADMIN_EMAIL="your-admin@example.com"
+OPENAI_API_KEY="your-openai-api-key"
+```
+
+### 🔐 **Google OAuth Setup**
 
 Before running the demo, you need to set up Google OAuth credentials. Follow these steps:
 
-### **1. Create Google Cloud Project**
+#### **1. Create Google Cloud Project**
 
 1. **Go to Google Cloud Console**: https://console.cloud.google.com/
 2. **Create a new project** or select an existing one
@@ -96,7 +180,7 @@ Before running the demo, you need to set up Google OAuth credentials. Follow the
    - Search for "Google+ API" 
    - Click "Enable"
 
-### **2. Configure OAuth Consent Screen**
+#### **2. Configure OAuth Consent Screen**
 
 1. **Go to "APIs & Services" > "OAuth consent screen"**
 2. **Choose "External" user type** (unless you have a Google Workspace)
@@ -134,14 +218,15 @@ Before running the demo, you need to set up Google OAuth credentials. Follow the
 5. **Click "Create"**
 6. **Copy the Client ID and Client Secret** - you'll need these for your `.env` file
 
-### **4. Update Environment Variables**
+#### **4. Update Environment Variables**
 
 Add your Google OAuth credentials to your `.env` file:
 
 ```bash
 # Required Google OAuth credentials
-GOOGLE_CLIENT_ID="your-client-id-here.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET="your-client-secret-here"
+OIDC_ISSUER_URL=https://accounts.google.com
+OIDC_CLIENT_ID="your-client-id-here.apps.googleusercontent.com"
+OIDC_CLIENT_SECRET="your-client-secret-here"
 
 # Other required variables
 ADMIN_EMAIL="your-admin@example.com"
@@ -152,7 +237,7 @@ OPENAI_API_KEY="your-openai-api-key"
 
 1. **Start the demo**: `./start_demo.sh`
 2. **Visit**: http://localhost:5001
-3. **Click login** - you should be redirected to Google
+3. **Click login** - you should be redirected to th configured OIDC provider
 4. **Sign in** with a test user email you added
 5. **Grant permissions** to the app
 6. **You should be redirected back** to the chat interface
@@ -190,7 +275,7 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 ### **How It Works**
 
 1. **🔐 Initial Authentication**
-   - User accesses Chat UI → redirected to Google OAuth
+   - User accesses Chat UI → redirected to OIDC provider
    - After OAuth success → user gets Llama Stack session token
    - Session token enables basic chat functionality
 
@@ -213,7 +298,7 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 
 ### **1. First-Time User Experience**
 1. **Access** http://localhost:5001
-2. **Login** with Google OAuth
+2. **Login** to the configured OIDC provider
 3. **Start with no permissions** - secure by default
 4. **Try a command**: "List files in /tmp"
 5. **See auto-approval** for safe operations
@@ -221,7 +306,7 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 
 ### **2. Admin Approval Workflow**
 1. **Try risky command**: "Execute command: ls -la"
-2. **See approval request** created automatically
+2. **See approvalf request** created automatically
 3. **Admin reviews** in dashboard at http://localhost:8003/dashboard
 4. **Approve/deny** with justification
 5. **User gets notification** and can retry
@@ -239,8 +324,9 @@ The following diagram shows the streamlined OAuth authentication and MCP token d
 # Required
 ADMIN_EMAIL="your-admin@example.com"
 OPENAI_API_KEY="your-openai-api-key"
-GOOGLE_CLIENT_ID="your-google-client-id"
-GOOGLE_CLIENT_SECRET="your-google-client-secret"
+OIDC_ISSUER_URL="your-oidc-issuer-url"
+OIDC_CLIENT_ID="your-oidc-client-id"
+OIDC_CLIENT_SECRET="your-oidc-client-secret"
 
 # Advanced
 JWT_MODE="asymmetric"  # or "symmetric"
@@ -398,10 +484,10 @@ tail -f logs/auth-server.log
 # (Use links in chat UI token dashboard)
 ```
 
-**Google OAuth setup required:**
+**OIDC setup required:**
 ```bash
-# Check Google OAuth credentials in .env
-cat .env | grep GOOGLE_
+# Check OIDC credentials in .env
+cat .env | grep OIDC_
 
 # Verify auth server is running
 curl http://localhost:8002/health

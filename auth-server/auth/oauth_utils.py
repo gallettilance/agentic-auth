@@ -1,47 +1,47 @@
 """
-OAuth 2.0 utilities for Google authentication
+OAuth 2.0 utilities for OIDC authentication
 """
 
 import logging
 import httpx
 from typing import Optional
-from models.schemas import GoogleDiscoveryDocument
+from models.schemas import OIDCDiscoveryDocument
 from config.settings import (
-    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_DISCOVERY_URL, 
-    GOOGLE_ISSUER, REDIRECT_URI
+    OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, 
+    OIDC_DISCOVERY_URL, REDIRECT_URI
 )
 
 logger = logging.getLogger(__name__)
 
-# Global variable for Google configuration
-google_config: Optional[GoogleDiscoveryDocument] = None
+# Global variable for OIDC configuration
+oidc_config: Optional[OIDCDiscoveryDocument] = None
 
-async def load_google_config():
-    """Load Google OAuth 2.0 configuration"""
-    global google_config
+async def load_oidc_config():
+    """Load OIDC configuration"""
+    global oidc_config
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(GOOGLE_DISCOVERY_URL)
+            response = await client.get(OIDC_DISCOVERY_URL)
             if response.status_code == 200:
                 config_data = response.json()
-                google_config = GoogleDiscoveryDocument(**config_data)
-                logger.info("✅ Loaded Google OAuth 2.0 configuration")
+                oidc_config = OIDCDiscoveryDocument(**config_data)
+                logger.info("✅ Loaded OpenID Connect (OIDC) configuration")
                 return True
             else:
-                logger.error(f"❌ Failed to load Google config: {response.status_code}")
+                logger.error(f"❌ Failed to load OIDC config: {response.status_code}")
                 return False
     except Exception as e:
-        logger.error(f"❌ Error loading Google config: {e}")
+        logger.error(f"❌ Error loading OIDC config: {e}")
         return False
 
 def get_oauth_url(state: str = "") -> str:
     """Generate OAuth authorization URL"""
-    if not google_config:
-        raise ValueError("Google configuration not loaded")
+    if not oidc_config:
+        raise ValueError("OIDC configuration not loaded")
     
     params = {
-        'client_id': GOOGLE_CLIENT_ID,
+        'client_id': OIDC_CLIENT_ID,
         'redirect_uri': REDIRECT_URI,
         'response_type': 'code',
         'scope': 'openid email profile',
@@ -49,16 +49,16 @@ def get_oauth_url(state: str = "") -> str:
     }
     
     param_string = '&'.join([f"{k}={v}" for k, v in params.items()])
-    return f"{google_config.authorization_endpoint}?{param_string}"
+    return f"{oidc_config.authorization_endpoint}?{param_string}"
 
 async def exchange_code_for_token(code: str) -> dict:
     """Exchange authorization code for access token"""
-    if not google_config:
-        raise ValueError("Google configuration not loaded")
+    if not oidc_config:
+        raise ValueError("OIDC configuration not loaded")
     
     token_data = {
-        'client_id': GOOGLE_CLIENT_ID,
-        'client_secret': GOOGLE_CLIENT_SECRET,
+        'client_id': OIDC_CLIENT_ID,
+        'client_secret': OIDC_CLIENT_SECRET,
         'code': code,
         'grant_type': 'authorization_code',
         'redirect_uri': REDIRECT_URI
@@ -66,7 +66,7 @@ async def exchange_code_for_token(code: str) -> dict:
     
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            google_config.token_endpoint,
+            oidc_config.token_endpoint,
             data=token_data,
             headers={'Content-Type': 'application/x-www-form-urlencoded'}
         )
@@ -78,13 +78,13 @@ async def exchange_code_for_token(code: str) -> dict:
             raise Exception(f"Token exchange failed: {response.status_code}")
 
 async def get_user_info(access_token: str) -> dict:
-    """Get user information from Google"""
-    if not google_config:
-        raise ValueError("Google configuration not loaded")
+    """Get user information from OIDC"""
+    if not oidc_config:
+        raise ValueError("OIDC configuration not loaded")
     
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            google_config.userinfo_endpoint,
+            oidc_config.userinfo_endpoint,
             headers={'Authorization': f'Bearer {access_token}'}
         )
         

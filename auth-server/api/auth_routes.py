@@ -7,9 +7,10 @@ from fastapi import APIRouter, HTTPException, Request, Response, Form, Depends, 
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from auth.session_manager import create_session, verify_user_auth, COOKIE_NAME, COOKIE_MAX_AGE, sessions
 from models.schemas import TokenPayload
-from config.settings import SERVER_URI, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_DISCOVERY_URL
+from config.settings import SERVER_URI, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_DISCOVERY_URL
 from datetime import datetime, timedelta
 from database import auth_db
+from auth.oauth_utils import get_oauth_url
 import httpx
 import jwt
 
@@ -21,8 +22,8 @@ REDIRECT_URI = f"{SERVER_URI}/auth/callback"
 
 @router.get("/login")
 async def login():
-    """OAuth login endpoint - redirects to Google OAuth (matching original implementation)"""
-    oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=openid%20email&state=auth_state"
+    """OAuth login endpoint - redirects to OIDC (matching original implementation)"""
+    oauth_url = get_oauth_url("auth_state")
     return RedirectResponse(url=oauth_url)
 
 @router.get("/authorize")
@@ -50,10 +51,10 @@ async def oauth_authorize(
     
     # Encode as URL-safe JSON
     encoded_request = urllib.parse.quote(json.dumps(original_request))
-    google_state = f"oauth_request:{encoded_request}"
+    oidc_state = f"oauth_request:{encoded_request}"
     
     # Redirect to Google OAuth with encoded state
-    oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope=openid%20email&state={google_state}"
+    oauth_url = get_oauth_url(oidc_state)
     return RedirectResponse(url=oauth_url)
 
 @router.get("/callback")
@@ -75,7 +76,7 @@ async def oauth_callback(code: str, state: str):
         
         # Get Google's token endpoint from discovery document
         async with httpx.AsyncClient() as client:
-            discovery_response = await client.get(GOOGLE_DISCOVERY_URL)
+            discovery_response = await client.get(OIDC_DISCOVERY_URL)
             discovery_data = discovery_response.json()
             token_endpoint = discovery_data["token_endpoint"]
         
@@ -84,8 +85,8 @@ async def oauth_callback(code: str, state: str):
             token_response = await client.post(
                 token_endpoint,
                 data={
-                    "client_id": GOOGLE_CLIENT_ID,
-                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "client_id": OIDC_CLIENT_ID,
+                    "client_secret": OIDC_CLIENT_SECRET,
                     "code": code,
                     "grant_type": "authorization_code",
                     "redirect_uri": REDIRECT_URI

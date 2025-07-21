@@ -59,7 +59,7 @@ class ProtectedResourceMetadata(BaseModel):
     bearer_methods_supported: Optional[List[str]] = None
     resource_documentation: Optional[str] = None
 
-class GoogleDiscoveryDocument(BaseModel):
+class OIDCDiscoveryDocument(BaseModel):
     issuer: str
     authorization_endpoint: str
     token_endpoint: str

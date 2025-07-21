@@ -3,6 +3,7 @@ Configuration settings for the auth server
 """
 
 import os
+from urllib.parse import urljoin
 
 # Server Configuration
 SERVER_NAME = "unified-auth-server"
@@ -11,11 +12,11 @@ SERVER_HOST = os.getenv("SERVER_HOST", "localhost")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8002"))
 SERVER_URI = f"http://{SERVER_HOST}:{SERVER_PORT}"
 
-# Google OAuth 2.0 Configuration
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "your-google-client-id")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "your-google-client-secret")
-GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
-GOOGLE_ISSUER = "https://accounts.google.com"
+# OIDC Configuration
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "your-oidc-client-id")
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET", "your-oidc-client-secret")
+OIDC_ISSUER_URL = os.getenv("OIDC_ISSUER_URL", "your-oidc-issuer-url")
+OIDC_DISCOVERY_URL = f"{OIDC_ISSUER_URL}/.well-known/openid-configuration"
 REDIRECT_URI = f"{SERVER_URI}/auth/callback"
 
 # Session management
