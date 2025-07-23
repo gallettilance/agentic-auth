@@ -1,0 +1,40 @@
+log_level = 9
+port = "8001"
+kubeconfig = #KUBECONFIG of the cluster
+list_output = "yaml"
+read_only = false
+disable_destructive = false
+require_oauth = true
+authorization_url = "http://localhost:8002"
+jwks_url = "http://localhost:8002/.well-known/jwks.json"
+server_url = "http://localhost:8001"
+certificate_authority = # certificate authority file for self-signed certificates
+
+denied_resources = [
+    {group = "", version = "v1", kind = "ServiceAccount"},
+    {group = "", version = "v1", kind = "Secret"},
+    {group = "rbac.authorization.k8s.io", version = "v1"}
+]
+
+disabled_tools = ["configuration_view"]
+
+enabled_tools = [
+    "events_list",
+    "namespaces_list",
+    "projects_list",
+    "pods_list",
+    "pods_list_in_namespace",
+    "pods_get",
+    "pods_delete",
+    "pods_top",
+    "pods_log",
+    "pods_run",
+    "pods_exec",
+    "resources_list",
+    "resources_get",
+    "resources_create_or_update",
+    "resources_delete",
+    "helm_install",
+    "helm_list",
+    "helm_uninstall"
+]

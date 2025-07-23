@@ -18,6 +18,7 @@ export SERVER_HOST=${SERVER_HOST:-localhost}
 export SERVER_PORT=${SERVER_PORT:-8002}
 export MCP_SERVER_URI=${MCP_SERVER_URI:-http://localhost:8001}
 export AUTH_DB_PATH=${AUTH_DB_PATH:-auth.db}
+export KUBERNETES_MCP_SERVER_DIR=${KUBERNETES_MCP_SERVER_DIR:-}
 
 # Admin Configuration
 export ADMIN_EMAIL=${ADMIN_EMAIL:-gallettilance@gmail.com}
@@ -84,25 +85,19 @@ cleanup() {
         echo "   ✅ Frontend stopped"
     fi
     
+    # Clean up temporary kubernetes-mcp-server directory if we created one
+    if [ -n "$KMCP_DIR" ] && [ -z "$KUBERNETES_MCP_SERVER_DIR" ] && [ -d "$KMCP_DIR" ]; then
+        echo "   🧹 Cleaning up temporary kubernetes-mcp-server directory: $KMCP_DIR"
+        rm -rf "$KMCP_DIR"
+        echo "   ✅ Temporary directory cleaned up"
+    fi
+    
     echo "🏁 Demo stopped"
     exit 0
 }
 
 # Set up signal handlers
 trap cleanup SIGINT SIGTERM
-
-# Start MCP Server
-echo ""
-echo "🔧 Starting MCP Server..."
-cd mcp
-FASTMCP_PORT=8001 python mcp_server.py > ../logs/mcp_server.log 2>&1 &
-MCP_PID=$!
-cd ..
-echo "   ✅ MCP Server started (PID: $MCP_PID)"
-echo "   📝 Logs: logs/mcp_server.log"
-
-# Wait a moment for MCP server to start
-sleep 2
 
 # Generate keys if using asymmetric mode
 if [ "$JWT_MODE" = "asymmetric" ]; then
@@ -166,6 +161,39 @@ echo "   ✅ Frontend started (PID: $FRONTEND_PID)"
 echo "   📝 Logs: logs/frontend.log"
 
 # Wait a moment for everything to start
+sleep 2
+
+# Start MCP Server
+echo ""
+echo "🔧 Starting Kubernetes MCP Server..."
+
+# Check if user specified a directory for kubernetes-mcp-server
+if [ -n "$KUBERNETES_MCP_SERVER_DIR" ] && [ -d "$KUBERNETES_MCP_SERVER_DIR" ]; then
+    echo "   📁 Using existing kubernetes-mcp-server directory: $KUBERNETES_MCP_SERVER_DIR"
+    KMCP_DIR="$KUBERNETES_MCP_SERVER_DIR"
+else
+    # Clone to temporary directory
+    KMCP_DIR=$(mktemp -d)
+    echo "   📦 Cloning kubernetes-mcp-server to temporary directory: $KMCP_DIR"
+    git clone https://github.com/containers/kubernetes-mcp-server.git "$KMCP_DIR"
+fi
+
+# Build the kubernetes-mcp-server
+echo "   🔨 Building kubernetes-mcp-server..."
+pushd "$KMCP_DIR"
+go build -o kubernetes-mcp-server ./cmd/kubernetes-mcp-server
+echo "   ✅ Build completed"
+popd
+
+# Run the kubernetes-mcp-server with our config
+echo "   🚀 Starting kubernetes-mcp-server with mcp_config.toml..."
+"$KMCP_DIR/kubernetes-mcp-server" --config "$(pwd)/mcp_config.toml" > logs/mcp_server.log 2>&1 &
+MCP_PID=$!
+cd ..
+echo "   ✅ MCP Server started (PID: $MCP_PID)"
+echo "   📝 Logs: logs/mcp_server.log"
+
+# Wait a moment for MCP server to start
 sleep 2
 
 echo ""
