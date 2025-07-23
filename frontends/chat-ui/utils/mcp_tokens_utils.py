@@ -20,7 +20,7 @@ AUTH_SERVER_URL = "http://localhost:8002"  # Default fallback
 
 def get_base_mcp_url(mcp_server_url: str) -> str:
     """Get base MCP URL by stripping /sse suffix if present"""
-    if mcp_server_url.endswith('/sse'):
+    if mcp_server_url.endswith('/mcp'):
         return mcp_server_url[:-4]
     return mcp_server_url
 
@@ -117,8 +117,8 @@ def prepare_mcp_headers_for_user(user_email: str) -> dict:
             if mcp_token and mcp_token != "NO_TOKEN_YET":
                 # Convert base URL to SSE endpoint URL for Llama Stack
                 mcp_endpoint_url = mcp_server_url
-                if not mcp_endpoint_url.endswith('/sse'):
-                    mcp_endpoint_url = f"{mcp_server_url}/sse"
+                if not mcp_endpoint_url.endswith('/mcp'):
+                    mcp_endpoint_url = f"{mcp_server_url}/mcp"
                 
                 mcp_headers[mcp_endpoint_url] = {
                     "Authorization": f"Bearer {mcp_token}"

@@ -470,7 +470,7 @@ def health():
 
 def get_base_mcp_url(mcp_server_url: str) -> str:
     """Get base MCP URL by stripping /sse suffix if present"""
-    if mcp_server_url.endswith('/sse'):
+    if mcp_server_url.endswith('/mcp'):
         return mcp_server_url[:-4]
     return mcp_server_url
 

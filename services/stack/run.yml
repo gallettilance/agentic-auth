@@ -48,7 +48,7 @@ tool_groups:
   - toolgroup_id: mcp::mcp-auth
     provider_id: model-context-protocol
     mcp_endpoint:
-      uri: "http://localhost:8001/sse"
+      uri: "http://localhost:8001/mcp"
 
 models:
   - model_id: gpt-4-turbo

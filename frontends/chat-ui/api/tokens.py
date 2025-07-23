@@ -528,7 +528,7 @@ def update_mcp_token_cookie():
         
         # For now, skip setting cookies to avoid cookie size issues with multiple MCP servers
         # Cookies are not essential for MCP token functionality - tokens are stored in session/database
-        base_server_url = server_url.rstrip('/sse') if server_url.endswith('/sse') else server_url
+        base_server_url = server_url.rstrip('/mcp') if server_url.endswith('/mcp') else server_url
         
         # Skip cookie setting since we now support multiple dynamically discovered MCP servers
         # and cookies have size limitations
