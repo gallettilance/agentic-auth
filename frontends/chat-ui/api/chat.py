@@ -441,7 +441,7 @@ def handle_consent_response():
             import asyncio
             
             async def update_consent_response():
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(verify=False) as client:
                     response = await client.put(
                         f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
                         json={

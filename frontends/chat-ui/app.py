@@ -77,7 +77,7 @@ def check_auth_server_session():
             return None
         
         # Verify session with auth server
-        with httpx.Client() as client:
+        with httpx.Client(verify=False) as client:
             response = client.get(
                 f"{AUTH_SERVER_URL}/api/user-status", 
                 cookies={'auth_session': auth_session_cookie},
@@ -104,7 +104,7 @@ async def request_llama_stack_token(auth_cookies: dict = {}, auth_server_url: st
             auth_server_url = AUTH_SERVER_URL
             logger.info(f"🔍 Using default auth server for Llama Stack: {auth_server_url}")
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{auth_server_url}/api/initial-token",
                 json={
@@ -139,7 +139,7 @@ def index():
         try:
             # Verify session with auth server
             import httpx
-            with httpx.Client() as client:
+            with httpx.Client(verify=False) as client:
                 response = client.get(
                     f"{AUTH_SERVER_URL}/api/user-status", 
                     cookies={'auth_session': auth_session_cookie},
@@ -210,7 +210,7 @@ def callback():
     try:
         # Exchange code for tokens via auth server
         import httpx
-        with httpx.Client() as client:
+        with httpx.Client(verify=False) as client:
             # First, complete OAuth flow with auth server
             response = client.post(
                 f"{AUTH_SERVER_URL}/auth/token",
@@ -301,6 +301,7 @@ def callback():
                                         
                                         # Strip /sse suffix to get base URL for service discovery
                                         base_mcp_url = mcp_url.rstrip('/sse')
+                                        base_mcp_url = mcp_url.rstrip('/mcp')
                                         
                                         mcp_server_urls.append(base_mcp_url)
                                         logger.info(f"✅ Found MCP server: {base_mcp_url} (endpoint: {mcp_url})")

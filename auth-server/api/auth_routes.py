@@ -75,13 +75,13 @@ async def oauth_callback(code: str, state: str):
                 logger.error(f"❌ Failed to decode OAuth request: {e}")
         
         # Get Google's token endpoint from discovery document
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             discovery_response = await client.get(OIDC_DISCOVERY_URL)
             discovery_data = discovery_response.json()
             token_endpoint = discovery_data["token_endpoint"]
         
         # Exchange code for token (simplified)
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             token_response = await client.post(
                 token_endpoint,
                 data={

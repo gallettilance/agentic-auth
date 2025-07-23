@@ -26,7 +26,7 @@ def check_auth_server_session_direct():
             return None
         
         # Verify session with auth server
-        with httpx.Client() as client:
+        with httpx.Client(verify=False) as client:
             response = client.get(
                 f"{AUTH_SERVER_URL}/api/user-status", 
                 cookies={'auth_session': auth_session_cookie},

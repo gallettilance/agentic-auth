@@ -170,7 +170,7 @@ async def request_scope_upgrade(required_scope: str, user_token: str, auth_cooki
             upgrade_data["current_token"] = current_token
             logger.info(f"🔄 Including current MCP token for scope upgrade: {current_token[:20]}...")
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{auth_server_url}/api/upgrade-scope",
                 json=upgrade_data,
@@ -244,7 +244,7 @@ async def request_mcp_token(required_scope: str, mcp_server_url: str, current_to
         # Get base URL for consistent token storage
         base_mcp_url = get_base_mcp_url(mcp_server_url)
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             # Use the dedicated MCP token endpoint
             response = await client.post(
                 f"{auth_server_url}/api/request-mcp-token",

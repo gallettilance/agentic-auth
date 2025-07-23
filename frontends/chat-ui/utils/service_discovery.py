@@ -34,7 +34,7 @@ class MCPServiceDiscovery:
             discovery_url = urljoin(mcp_server_url, "/.well-known/oauth-protected-resource")
             logger.info(f"🔍 Discovering MCP auth config: {discovery_url}")
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 response = await client.get(discovery_url, timeout=self.timeout)
                 
                 if response.status_code == 200:

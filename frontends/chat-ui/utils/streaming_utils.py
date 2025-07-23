@@ -264,7 +264,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                             try:
                                 from utils.mcp_tokens_utils import AUTH_SERVER_URL
                                 async def store_consent_request():
-                                    async with httpx.AsyncClient() as client:
+                                    async with httpx.AsyncClient(verify=False) as client:
                                         await client.post(
                                             f'{AUTH_SERVER_URL}/api/consent-requests',
                                             json={
@@ -299,7 +299,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                             while user_approved is None and timeout_count < 120:  # 60 second timeout
                                 try:
                                     async def check_consent_response():
-                                        async with httpx.AsyncClient() as client:
+                                        async with httpx.AsyncClient(verify=False) as client:
                                             response = await client.get(
                                                 f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
                                                 timeout=5.0
@@ -346,7 +346,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                             try:
                                 import httpx
                                 async def update_cookie():
-                                    async with httpx.AsyncClient() as client:
+                                    async with httpx.AsyncClient(verify=False) as client:
                                         await client.post(
                                             'http://localhost:5001/api/update-mcp-token-cookie',
                                             json={
@@ -512,7 +512,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         try:
                             from utils.mcp_tokens_utils import AUTH_SERVER_URL
                             async def store_consent_request():
-                                async with httpx.AsyncClient() as client:
+                                async with httpx.AsyncClient(verify=False) as client:
                                     await client.post(
                                         f'{AUTH_SERVER_URL}/api/consent-requests',
                                         json={

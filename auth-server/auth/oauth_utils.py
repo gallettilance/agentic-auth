@@ -21,7 +21,7 @@ async def load_oidc_config():
     global oidc_config
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.get(OIDC_DISCOVERY_URL)
             if response.status_code == 200:
                 config_data = response.json()
@@ -64,7 +64,7 @@ async def exchange_code_for_token(code: str) -> dict:
         'redirect_uri': REDIRECT_URI
     }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.post(
             oidc_config.token_endpoint,
             data=token_data,
@@ -82,7 +82,7 @@ async def get_user_info(access_token: str) -> dict:
     if not oidc_config:
         raise ValueError("OIDC configuration not loaded")
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.get(
             oidc_config.userinfo_endpoint,
             headers={'Authorization': f'Bearer {access_token}'}

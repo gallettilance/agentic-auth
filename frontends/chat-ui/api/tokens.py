@@ -131,7 +131,8 @@ def check_token_update():
                 response = requests.get(
                     f"{auth_server_url}/api/check-token-update",
                     cookies=auth_cookies,
-                    timeout=10
+                    timeout=10,
+                    verify=False
                 )
                 
                 if response.status_code == 200:
@@ -299,7 +300,8 @@ def refresh_llama_stack_token():
         user_status_response = requests.get(
             f"{AUTH_SERVER_URL}/api/user-status",
             cookies=auth_cookies,
-            timeout=10
+            timeout=10,
+            verify=False
         )
         
         if user_status_response.status_code != 200:
@@ -325,7 +327,8 @@ def refresh_llama_stack_token():
                 "scopes": llama_stack_scopes  # Use filtered scopes
             },
             cookies=auth_cookies,
-            timeout=10
+            timeout=10,
+            verify=False
         )
         
         if token_response.status_code == 200:

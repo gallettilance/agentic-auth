@@ -100,7 +100,7 @@ def handle_oauth_callback():
 async def exchange_code_for_token(code: str) -> dict:
     """Exchange authorization code for access token"""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             # Exchange code for token with auth server
             response = await client.post(
                 f"{AUTH_SERVER_URL}/oauth/token",
@@ -153,7 +153,7 @@ async def exchange_code_for_token(code: str) -> dict:
 async def get_user_info(access_token: str) -> dict:
     """Get user info from OIDC"""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.get(OIDC_DISCOVERY_URL)
 
             if response.status_code == 200:
@@ -167,7 +167,7 @@ async def get_user_info(access_token: str) -> dict:
                 logger.error(f"❌ Error getting OIDC Discovery Document")
                 return None
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.get(
                 userinfo_endpoint,
                 headers={'Authorization': f'Bearer {access_token}'},
@@ -187,7 +187,7 @@ async def get_user_info(access_token: str) -> dict:
 async def get_bearer_token_from_auth_server(user_info: dict) -> str:
     """Get bearer token from auth server"""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{AUTH_SERVER_URL}/api/get-token",
                 json=user_info,
