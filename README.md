@@ -1,519 +1,78 @@
-# 🔐 Authentication & Authorization System for AI Agents
+# Authentication Demo - Keycloak Token Exchange V2
 
-A comprehensive authentication and authorization system for AI agents with **OIDC**, **JWT tokens**, **scope-based permissions**, and **real-time approval workflows**. Built for secure MCP (Model Context Protocol) tool access with automatic permission escalation.
+A demonstration of **Keycloak-based authentication and authorization** using RFC 8693 Token Exchange for dynamic scope management. Shows how users can authenticate once and exchange tokens for specific service access (MCP tools, Llama Stack agents) based on their roles.
 
-## 🎯 **What This System Does**
+## What This Demo Shows
 
-This system provides **secure, granular access control** for AI agents interacting with system resources. Users authenticate once via OIDC, then the system automatically manages permissions as AI agents request access to different tools and resources.
+- **Keycloak** as the authorization server (replaces custom auth server code)
+- **Zero-trust authentication**: Users start with minimal permissions
+- **Dynamic scope exchange**: Request specific service permissions when needed
+- **Role-based access**: Regular users vs admin users get different scopes
+- **Standards compliance**: RFC 8693 OAuth 2.0 Token Exchange
 
-### **Key Capabilities**
-- 🔐 **OIDC Authentication** - Secure login using OIDC
-- 🎫 **JWT Token Management** - Automatic token generation and refresh
-- 🔧 **MCP Tool Integration** - Secure access to file system, commands, and APIs
-- 📋 **Dynamic Approval Workflows** - Auto-approve safe operations, require admin approval for risky ones
-- 🤖 **AI Agent Integration** - Llama Stack agents with secure tool access
-- 👑 **Admin Dashboard** - Real-time approval management and user oversight
-- 🔄 **Auto-Retry Logic** - Seamless user experience when permissions are granted
+**Services in the demo:**
+- Chat UI frontend with Keycloak authentication
+- MCP Server for file operations (with scope-based permissions)
+- Llama Stack for AI agents (with scope-based permissions)
 
-## 🏗️ **System Architecture**
+## Prerequisites
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Chat UI       │    │   Auth Server   │    │   MCP Server    │
-│   (Flask)       │◄──►│   (FastAPI)     │    │   (FastMCP)     │
-│   Port 5001     │    │   Port 8002     │    │   Port 8001     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 ▼
-                    ┌─────────────────┐    ┌─────────────────┐
-                    │  Llama Stack    │    │ Admin Dashboard │
-                    │  (AI Agents)    │    │   (Flask)       │
-                    │  Port 8321      │    │   Port 8003     │
-                    └─────────────────┘    └─────────────────┘
-```
+- **Docker** (for Keycloak)
+- **Python 3.8+**
+- **pip**
 
-## 🚀 **Quick Start**
+## Install Dependencies
 
-### **Prerequisites**
 ```bash
-# Python 3.12+ required
-python --version
-
-# Install dependencies
-pip install -r requirements.txt
+# Install Python dependencies
+pip install -r requirements.txt  # If requirements.txt exists
+# OR install manually:
+pip install requests flask authlib httpx fastmcp llama-stack-client
 ```
 
-### **Browser Recommendation**
-🌐 **Recommended Browser: Google Chrome**
-- OAuth flows are optimized for Chrome
-- Token debugging features work best in Chrome
-- Cookie management is most reliable in Chrome
+## Run the Demo
 
-### **Environment Setup**
 ```bash
-# Copy environment template
-cp env.example .env
-
-# Edit .env file with your settings:
-# - ADMIN_EMAIL (required)
-# - OPENAI_API_KEY (required for AI agents)
-# - OIDC_CLIENT_ID/SECRET (required for OIDC)
-```
-
-### **Start the System**
-```bash
-# One command to start everything
+# Start everything (Keycloak + all services)
 ./start_demo.sh
-
-# Access the applications:
-# - Chat UI: http://localhost:5001
-# - Admin Dashboard: http://localhost:8003/dashboard
-# - Auth Server: http://localhost:8002
 ```
 
-### **Stop the System**
+**What this does:**
+1. Starts Keycloak authorization server
+2. Configures realm, client, scopes, roles, and users automatically  
+3. Starts chat frontend, MCP server, and Llama Stack
+4. Sets up environment variables
+
+**Access the demo:**
+- **Chat Frontend**: http://localhost:5001
+- **Login credentials**: 
+  - Regular user: `lance` / `password`
+  - Admin user: `admin-user` / `password`
+
+**Try it out:**
+1. Login to the chat UI
+2. Send messages to see AI agent responses
+3. Try file operations (uses MCP with dynamic token exchange)
+4. Notice how admin users can access additional commands
+
+## Cleanup
+
 ```bash
-# Stop all services (preserves data)
+# Stop all services
 ./stop_demo.sh
 
-# Complete cleanup (removes all data)
+# Complete cleanup (removes Docker containers)
 ./cleanup_demo.sh
 ```
 
-⚠️ **Important**: `stop_demo.sh` will **force close Chrome** to clear authentication cookies. Save any important Chrome work before running this command.
-
-## OIDC Provider
-
-Before running the demo, you need to set up an OIDC Provider (such as Keycloak or Google).
-
-### 🔐 **Keycloak**
-
-Before running the demo, you can use Keycloak as a OIDC provider. Follow these steps:
-
-#### **1. Create a new Realm**
-
-_Note_: This step is not required, but highly encouraged
-
-1. **Go to the Keycloak Administration Interface**
-2. **Click Manage Realms**
-3. **Click Create realm** or select an existing one
-  - Enter the name of the desired realm
-  - Click "Create"
-
-#### **2. Create Users**
-
-There must be at least one user created in the realm. Use the following steps to create a user and assign a password:
-
-1. **Ensure you are in the desired realm**
-2. **Click Users on the left hand navigation**
-3. **Click Add User**
-4. **Enter the following in the Create User page**
-  - Username
-  - Email
-  - First Name
-  - Last Name
-  - Email Verified (checked)
-  - Click "Create"
-5. **Set a password for the user**
-  - Click the "Credentials" tab
-  - Click "Set password"
-  - Enter and confirm the desired password
-  - Deselect "Temporary"
-  - Click "Save"
-
-#### **3. Create an OIDC Client**
-
-1. **Ensure you are in the desired realm**
-2. **Click Clients on the left hand navigation**
-3. **Click Create client**
-4. **Fill out the General Settings section**
-  - Client ID (such as `authentication-demo`)
-  - Click "Next"
-5. **Fill out the Capability Config section**
-  - Enable "Client Authentication"
-  - Click "Next"
-6. **Fill out the Login Settings section**
-   - Valid redirect URI's:
-     ```
-     http://localhost:8002/auth/callback
-     http://localhost:5001/callback
-     http://localhost:8003/callback
-     ```
-   - Click "Save"
-7. ***Obtain Client Secret**
-  - Click on "Credentials" tab
-  - Reveal or copy the secret next to "Client Secret"
-
-#### **4. Obtain OIDC Issuer URL**
-
-1. **Ensure you are in the desired realm**
-2. **Click Realm Settings on the left hand navigation**
-3. **Click the `OpenID Endpoint Configuration` link**
-4. **The OIDC Issuer can be found within the `issuer` property**
-
-#### **5. Update Environment Variables**
-
-Add your Keycloak OAuth credentials to your `.env` file:
-
-```bash
-# Required Keycloak OAuth credentials
-OIDC_ISSUER_URL="your-realm-oidc-issuer"
-OIDC_CLIENT_ID="your-client-id-here"
-OIDC_CLIENT_SECRET="your-client-secret-here"
-
-# Other required variables
-ADMIN_EMAIL="your-admin@example.com"
-OPENAI_API_KEY="your-openai-api-key"
-```
-
-### 🔐 **Google OAuth Setup**
-
-Before running the demo, you need to set up Google OAuth credentials. Follow these steps:
-
-#### **1. Create Google Cloud Project**
-
-1. **Go to Google Cloud Console**: https://console.cloud.google.com/
-2. **Create a new project** or select an existing one
-3. **Enable the Google+ API**:
-   - Go to "APIs & Services" > "Library"
-   - Search for "Google+ API" 
-   - Click "Enable"
-
-#### **2. Configure OAuth Consent Screen**
-
-1. **Go to "APIs & Services" > "OAuth consent screen"**
-2. **Choose "External" user type** (unless you have a Google Workspace)
-3. **Fill in required fields**:
-   - App name: `Authentication Demo`
-   - User support email: Your email
-   - Developer contact email: Your email
-4. **Add scopes** (click "Add or Remove Scopes"):
-   - `openid`
-   - `email`
-   - `profile`
-5. **Add test users** (for External apps):
-   - Add your email address and any other emails you want to test with
-6. **Save and continue** through all steps
-
-### **3. Create OAuth Credentials**
-
-1. **Go to "APIs & Services" > "Credentials"**
-2. **Click "Create Credentials" > "OAuth 2.0 Client ID"**
-3. **Choose "Web application"**
-4. **Configure the client**:
-   - **Name**: `Authentication Demo Client`
-   - **Authorized JavaScript origins**:
-     ```
-     http://localhost:5001
-     http://localhost:8002
-     http://localhost:8003
-     ```
-   - **Authorized redirect URIs**:
-     ```
-     http://localhost:8002/auth/callback
-     http://localhost:5001/callback
-     http://localhost:8003/callback
-     ```
-5. **Click "Create"**
-6. **Copy the Client ID and Client Secret** - you'll need these for your `.env` file
-
-#### **4. Update Environment Variables**
-
-Add your Google OAuth credentials to your `.env` file:
-
-```bash
-# Required Google OAuth credentials
-OIDC_ISSUER_URL=https://accounts.google.com
-OIDC_CLIENT_ID="your-client-id-here.apps.googleusercontent.com"
-OIDC_CLIENT_SECRET="your-client-secret-here"
-
-# Other required variables
-ADMIN_EMAIL="your-admin@example.com"
-OPENAI_API_KEY="your-openai-api-key"
-```
-
-### **5. Test Your Setup**
-
-1. **Start the demo**: `./start_demo.sh`
-2. **Visit**: http://localhost:5001
-3. **Click login** - you should be redirected to th configured OIDC provider
-4. **Sign in** with a test user email you added
-5. **Grant permissions** to the app
-6. **You should be redirected back** to the chat interface
-
-### **🚨 Common OAuth Issues**
-
-**"Error 400: redirect_uri_mismatch"**
-```bash
-# Check your redirect URIs in Google Cloud Console
-# Make sure you have: http://localhost:8002/auth/callback
-```
-
-**"Error 403: access_denied"**
-```bash
-# Add your email as a test user in OAuth consent screen
-# Or publish your app (not recommended for development)
-```
-
-**"Error 401: invalid_client"**
-```bash
-# Check your GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env
-# Make sure there are no extra spaces or quotes
-```
-
-## 🔄 **System Overview & Authentication Flow**
-
-### **System Components Overview**
-![System Overview](diagrams/system-overview.svg)
-
-### **OAuth and MCP Token Discovery Flow**
-The following diagram shows the streamlined OAuth authentication and MCP token discovery process:
-
-![OAuth MCP Discovery Flow](diagrams/oauth-mcp-discovery-flow.svg)
-
-### **How It Works**
-
-1. **🔐 Initial Authentication**
-   - User accesses Chat UI → redirected to OIDC provider
-   - After OAuth success → user gets Llama Stack session token
-   - Session token enables basic chat functionality
-
-2. **🔧 Tool Discovery & Authorization**
-   - AI agent attempts to use MCP tool → gets 403 (insufficient scope)
-   - System automatically requests required scope from auth server
-   - Auth server evaluates policy: auto-approve safe tools, require admin approval for risky ones
-
-3. **🎫 Token Exchange & Upgrade**
-   - For auto-approved scopes: immediate token upgrade
-   - For admin-required scopes: approval workflow with admin dashboard
-   - User gets both Llama Stack and MCP tokens with appropriate scopes
-
-4. **✅ Seamless Execution**
-   - User retries request with new permissions
-   - AI agent successfully executes tool with valid scope
-   - Future requests use cached tokens until expiration
-
-## 📋 **Demo Walkthrough**
-
-### **1. First-Time User Experience**
-1. **Access** http://localhost:5001
-2. **Login** to the configured OIDC provider
-3. **Start with no permissions** - secure by default
-4. **Try a command**: "List files in /tmp"
-5. **See auto-approval** for safe operations
-6. **View updated permissions** in token dashboard
-
-### **2. Admin Approval Workflow**
-1. **Try risky command**: "Execute command: ls -la"
-2. **See approvalf request** created automatically
-3. **Admin reviews** in dashboard at http://localhost:8003/dashboard
-4. **Approve/deny** with justification
-5. **User gets notification** and can retry
-
-### **3. Token Management**
-1. **View token dashboard** in chat UI
-2. **See current scopes** and permissions
-3. **Debug tokens** with JWT.io integration
-4. **Monitor real-time updates** every 5 seconds
-
-## 🔧 **Configuration**
-
-### **Environment Variables**
-```bash
-# Required
-ADMIN_EMAIL="your-admin@example.com"
-OPENAI_API_KEY="your-openai-api-key"
-OIDC_ISSUER_URL="your-oidc-issuer-url"
-OIDC_CLIENT_ID="your-oidc-client-id"
-OIDC_CLIENT_SECRET="your-oidc-client-secret"
-
-# Advanced
-JWT_MODE="asymmetric"  # or "symmetric"
-AUTH_SERVER_URL="http://localhost:8002"
-```
-
-### **Permission Policies**
-The system uses database-driven policies for different scopes:
-
-| Scope | Description | Policy | Risk Level |
-|-------|-------------|--------|------------|
-| `list_files` | List directory contents | Auto-approve | Low |
-| `read_file` | Read file contents | Auto-approve | Low |
-| `health_check` | System health check | Auto-approve | Low |
-| `execute_command` | Run system commands | Admin approval | Critical |
-| `write_file` | Write to files | Admin approval | High |
-| `delete_file` | Delete files | Admin approval | High |
-
-## 🛡️ **Security Features**
-
-### **Zero-Trust Architecture**
-- **Users start with no permissions** - even returning users
-- **Dynamic permission escalation** via token exchange
-- **Every tool request is validated** against current token scopes
-- **Admin oversight** for high-risk operations
-
-### **JWT Token Security**
-- **Asymmetric RS256 signing** with auto-generated keys
-- **JWKS endpoint** for public key distribution
-- **Token expiration** and refresh mechanisms
-- **Secure cookie handling** across all services
-
-### **Audit & Monitoring**
-- **Complete audit trail** of all permission requests
-- **Real-time approval workflows** with admin notifications
-- **Comprehensive logging** across all services
-- **JWT.io integration** for token debugging
-
-## 📁 **Project Structure**
-
-```
-Authentication/
-├── auth-server/                    # Authentication server
-│   ├── main.py                    # FastAPI application
-│   ├── database.py                # SQLite database operations
-│   ├── api/                       # API routes
-│   ├── auth/                      # Authentication logic
-│   ├── utils/                     # Utilities (JWT, MCP, etc.)
-│   └── config/                    # Configuration
-├── frontends/
-│   ├── chat-ui/                   # Chat interface
-│   │   ├── app.py                 # Flask application
-│   │   ├── api/                   # API blueprints
-│   │   ├── templates/             # HTML templates
-│   │   └── utils/                 # Utility functions
-│   └── admin-dashboard/           # Admin interface
-│       ├── app.py                 # Flask application
-│       └── templates/             # HTML templates
-├── mcp/                           # MCP server
-│   ├── mcp_server.py              # FastMCP server
-│   └── README.md                  # MCP documentation
-├── services/                      # Llama Stack configuration
-│   ├── stack/run.yml              # Llama Stack config
-│   └── auth-agent/                # Custom auth agent
-├── diagrams/                      # Architecture diagrams
-│   ├── oauth-mcp-discovery-flow.mmd  # OAuth & MCP token flow
-│   ├── system-overview.mmd        # System components overview
-│   └── *.svg                      # Rendered diagrams
-├── start_demo.sh                  # One-command startup
-├── stop_demo.sh                   # Stop all services
-└── cleanup_demo.sh                # Complete cleanup
-```
-
-## 🔍 **API Endpoints**
-
-### **Chat UI (Port 5001)**
-```
-GET  /                             # Chat interface
-GET  /callback                     # OAuth callback
-POST /api/chat                     # Send message
-GET  /api/chat-history             # Get chat history
-GET  /api/token-info               # Token dashboard data
-```
-
-### **Auth Server (Port 8002)**
-```
-GET  /auth/authorize               # OAuth authorization
-POST /auth/token                   # Token exchange
-GET  /api/user-status              # Check authentication
-POST /api/upgrade-scope            # Request scope upgrade
-GET  /.well-known/jwks.json        # Public keys
-```
-
-### **Admin Dashboard (Port 8003)**
-```
-GET  /dashboard                    # Admin interface
-GET  /api/pending-approvals        # Pending requests
-POST /api/approve/{id}             # Approve request
-POST /api/deny/{id}                # Deny request
-```
-
-## 🛠️ **Development**
-
-### **Running Individual Services**
-```bash
-# Auth Server
-cd auth-server
-python main.py
-
-# Chat UI
-cd frontends/chat-ui
-python app.py
-
-# Admin Dashboard
-cd frontends/admin-dashboard
-python app.py
-
-# MCP Server
-cd mcp
-python mcp_server.py
-```
-
-### **Database Management**
-```bash
-# View database contents
-sqlite3 auth-server/auth.db
-
-# Check users and roles
-SELECT * FROM users;
-SELECT * FROM user_roles;
-
-# View approval policies
-SELECT * FROM scope_policies;
-```
-
-## 🚨 **Troubleshooting**
-
-### **Common Issues**
-
-**Services won't start:**
-```bash
-# Check for port conflicts
-lsof -i :5001 -i :5002 -i :8001 -i :8002 -i :8321
-
-# Kill existing processes
-./stop_demo.sh
-```
-
-**Authorization not working:**
-```bash
-# Check auth server logs
-tail -f logs/auth-server.log
-
-# Verify token in JWT.io
-# (Use links in chat UI token dashboard)
-```
-
-**OIDC setup required:**
-```bash
-# Check OIDC credentials in .env
-cat .env | grep OIDC_
-
-# Verify auth server is running
-curl http://localhost:8002/health
-```
-
-## 🤝 **Contributing**
-
-1. **Fork** the repository
-2. **Create** feature branch: `git checkout -b feature/amazing-feature`
-3. **Test** with demo: `./start_demo.sh`
-4. **Commit** changes: `git commit -m 'Add amazing feature'`
-5. **Push** to branch: `git push origin feature/amazing-feature`
-6. **Open** Pull Request
-
-## 📜 **License**
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 **Acknowledgments**
-
-- **RFC 8693** Token Exchange specification
-- **FastAPI** and **Flask** web frameworks
-- **FastMCP** for Model Context Protocol
-- **Llama Stack** for AI agent integration
-- **JWT.io** for token debugging tools
+## Key Files
+
+- `setup_keycloak_v2.py` - Configures Keycloak automatically
+- `start_demo.sh` - One-command demo startup
+- `frontends/chat-ui/` - Chat interface with Keycloak auth
+- `mcp/mcp_server.py` - MCP server with token validation
+- `auth-server/` - ❌ Old custom auth server (no longer used)
 
 ---
 
-**🌟 This system provides enterprise-grade authentication with zero-trust security, automatic user onboarding, and real-time permission management for AI agent interactions.** 
+**🎯 Quick Start**: Run `./start_demo.sh` and visit http://localhost:5001 

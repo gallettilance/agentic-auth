@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Chat UI Frontend
+Chat UI Frontend (Keycloak Edition)
 A lightweight Flask application that provides the chat interface.
-Communicates with backend services (Llama Stack, Auth Server) via API calls.
+Connects directly to Keycloak for OIDC authentication.
 """
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, make_response
@@ -12,7 +12,14 @@ import logging
 import sys
 from datetime import timedelta
 import asyncio
-from typing import Optional
+from typing import Optional, List
+import urllib.parse
+import httpx
+import json
+from flask_cors import CORS
+import base64
+import hashlib
+import aiohttp
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -29,485 +36,479 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
 
-# Configure session settings to match auth server
+# Configure session settings  
 app.config.update(
     SESSION_COOKIE_SECURE=False,  # Set to True in production with HTTPS
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_NAME='chat_session',  # Different name to avoid conflicts with auth server
-    SESSION_COOKIE_DOMAIN='localhost',
-    SESSION_COOKIE_PATH='/',
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
+    SESSION_COOKIE_NAME='chat_session',
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=24),  # Longer session lifetime
     SESSION_REFRESH_EACH_REQUEST=True
 )
 
-# Configuration - these will be moved to config files later
+# Enable CORS for development
+CORS(app, supports_credentials=True)
+
+# Configuration - Keycloak OIDC
+OIDC_ISSUER_URL = os.getenv("OIDC_ISSUER_URL")
 OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID")
 OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")
-AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "http://localhost:8002")
 LLAMA_STACK_URL = os.getenv("LLAMA_STACK_URL", "http://localhost:8321")
-REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:5001/callback")
+REDIRECT_URI = "http://localhost:5001/callback"
 
-# Global variables for MCP token management
-mcp_token_cache = {}  # Global cache for MCP tokens by user email
+# Validate required configuration
+if not all([OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET]):
+    logger.error("❌ Missing required OIDC configuration. Please set OIDC_ISSUER_URL, OIDC_CLIENT_ID, and OIDC_CLIENT_SECRET")
+    sys.exit(1)
 
-# MCP service discovery now happens dynamically after OAuth
+# Global variables for token management
+token_cache = {}  # Token cache by user email
 
 # Import API blueprints
 from api.chat import chat_bp
-from api.auth import auth_bp
 from api.tokens import tokens_bp
 
 # Register blueprints
 app.register_blueprint(chat_bp, url_prefix='/api')
-app.register_blueprint(auth_bp, url_prefix='/api')
 app.register_blueprint(tokens_bp, url_prefix='/api')
 
-# MCP discovery moved to OAuth callback flow - happens dynamically 
-# after authentication when we have Llama Stack access
-
-def check_auth_server_session():
-    """Check if user has valid session with auth server"""
+async def get_oidc_configuration():
+    """Get OIDC configuration from discovery endpoint"""
     try:
-        import httpx
-        
-        # Get auth session cookie
-        auth_session_cookie = request.cookies.get('auth_session')
-        if not auth_session_cookie:
-            return None
-        
-        # Verify session with auth server
-        with httpx.Client() as client:
-            response = client.get(
-                f"{AUTH_SERVER_URL}/api/user-status", 
-                cookies={'auth_session': auth_session_cookie},
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
-                user_data = response.json()
-                if user_data.get('authenticated'):
-                    return user_data['user']  # Return just the user data
-        
-        return None
-    except Exception as e:
-        logger.error(f"Error checking auth server session: {e}")
-        return None
-
-async def request_llama_stack_token(auth_cookies: dict = {}, auth_server_url: str | None = None) -> dict:
-    """Request a Llama Stack token from auth server"""
-    try:
-        import httpx
-        
-        # Use default auth server for Llama Stack (MCP discovery only for now)
-        if not auth_server_url:
-            auth_server_url = AUTH_SERVER_URL
-            logger.info(f"🔍 Using default auth server for Llama Stack: {auth_server_url}")
-        
+        discovery_url = f"{OIDC_ISSUER_URL}/.well-known/openid-configuration"
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{auth_server_url}/api/initial-token",
-                json={
-                    "resource": LLAMA_STACK_URL,  # Changed from "audience" to "resource"
-                    "scopes": []  # Start with empty scopes
-                },
-                cookies=auth_cookies,
-                timeout=10.0
-            )
-            
+            response = await client.get(discovery_url, timeout=10.0)
             if response.status_code == 200:
                 return response.json()
-            else:
-                logger.error(f"❌ Failed to get Llama Stack token: {response.status_code}")
-                return {}
-                
     except Exception as e:
-        logger.error(f"❌ Error requesting Llama Stack token: {e}")
-        return {}
+        logger.error(f"Error getting OIDC configuration: {e}")
+    return None
+
+async def exchange_for_llama_stack_token(access_token: str) -> dict:
+    """Exchange access token for Llama Stack token using Token Exchange V2 self-exchange"""
+    try:
+        config = await get_oidc_configuration()
+        if not config:
+            return {'success': False, 'error': 'OIDC configuration not available'}
+        
+        token_endpoint = config.get('token_endpoint')
+        if not token_endpoint:
+            return {'success': False, 'error': 'Token endpoint not found'}
+        
+        # Token Exchange V2 - Self-exchange for Llama scopes
+        llama_scopes = [
+            'llama:agent_create',
+            'llama:agent_session_create', 
+            'llama:inference_chat_completion'
+        ]
+        
+        # Token exchange request data (RFC 8693)
+        data = {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:token-exchange',
+            'subject_token': access_token,
+            'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
+            'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
+            'audience': OIDC_CLIENT_ID,  # Self-exchange using same client ID
+            'scope': ' '.join(llama_scopes)
+        }
+        
+        # Use Basic Auth for confidential client (consistent approach)
+        auth_string = base64.b64encode(f"{OIDC_CLIENT_ID}:{OIDC_CLIENT_SECRET}".encode()).decode()
+        headers = {
+            'Authorization': f'Basic {auth_string}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        logger.info(f"🔄 Token Exchange V2 - Llama scopes: {llama_scopes}")
+        logger.info(f"🎯 Using audience: {OIDC_CLIENT_ID} (self-exchange)")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_endpoint, data=data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ Llama Stack token exchange successful")
+                    return {
+                        'success': True,
+                        'token': result['access_token'],
+                        'scopes': llama_scopes
+                    }
+                else:
+                    error_data = await response.json()
+                    logger.error(f"❌ Llama Stack token exchange failed: {error_data}")
+                    return {
+                        'success': False,
+                        'error': error_data.get('error', 'Unknown error'),
+                        'error_description': error_data.get('error_description', '')
+                    }
+                    
+    except Exception as e:
+        logger.error(f"❌ Llama Stack token exchange exception: {e}")
+        return {'success': False, 'error': str(e)}
+
+async def exchange_for_mcp_token(access_token: str) -> dict:
+    """Exchange access token for MCP token using Token Exchange V2 self-exchange"""
+    try:
+        config = await get_oidc_configuration()
+        if not config:
+            return {'success': False, 'error': 'OIDC configuration not available'}
+        
+        token_endpoint = config.get('token_endpoint')
+        if not token_endpoint:
+            return {'success': False, 'error': 'Token endpoint not found'}
+        
+        # Token Exchange V2 - Self-exchange for MCP scopes
+        mcp_scopes = [
+            'mcp:list_files', 
+            'mcp:get_server_info', 
+            'mcp:health_check', 
+            'mcp:list_tool_scopes'
+        ]
+        
+        # Token exchange request data (RFC 8693)
+        data = {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:token-exchange',
+            'subject_token': access_token,
+            'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
+            'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
+            'audience': OIDC_CLIENT_ID,  # Self-exchange using same client ID  
+            'scope': ' '.join(mcp_scopes)
+        }
+        
+        # Use Basic Auth for confidential client (consistent approach)
+        auth_string = base64.b64encode(f"{OIDC_CLIENT_ID}:{OIDC_CLIENT_SECRET}".encode()).decode()
+        headers = {
+            'Authorization': f'Basic {auth_string}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        logger.info(f"🔄 Token Exchange V2 - MCP scopes: {mcp_scopes}")
+        logger.info(f"🎯 Using audience: {OIDC_CLIENT_ID} (self-exchange)")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_endpoint, data=data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ MCP token exchange successful")
+                    return {
+                        'success': True,
+                        'token': result['access_token'],
+                        'scopes': mcp_scopes
+                    }
+                else:
+                    error_data = await response.json()
+                    logger.error(f"❌ MCP token exchange failed: {error_data}")
+                    return {
+                        'success': False,
+                        'error': error_data.get('error', 'Unknown error'),
+                        'error_description': error_data.get('error_description', '')
+                    }
+                    
+    except Exception as e:
+        logger.error(f"❌ MCP token exchange exception: {e}")
+        return {'success': False, 'error': str(e)}
 
 @app.route('/')
 def index():
     """Main page - check for authentication"""
     logger.info(f"🏠 Index page accessed")
     
-    # Check if user has valid auth session cookie
-    auth_session_cookie = request.cookies.get('auth_session')
-    llama_stack_token = request.cookies.get('llama_stack_token')
+    # Debug: log session contents
+    logger.info(f"🔍 Session keys: {list(session.keys())}")
+    logger.info(f"🔍 Session contents: {dict(session)}")
+    logger.info(f"🔍 Authenticated: {session.get('authenticated')}")
+    logger.info(f"🔍 User email: {session.get('user_email')}")
+    logger.info(f"🔍 Access token exists: {bool(session.get('access_token'))}")
     
-    if auth_session_cookie and llama_stack_token:
-        # User is authenticated with both auth session and Llama Stack token
-        try:
-            # Verify session with auth server
-            import httpx
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{AUTH_SERVER_URL}/api/user-status", 
-                    cookies={'auth_session': auth_session_cookie},
-                    timeout=5.0
-                )
-                
-                if response.status_code == 200:
-                    user_data = response.json()
-                    if user_data.get('authenticated'):
-                        auth_user = user_data['user']
-                        logger.info(f"✅ Found valid session for {auth_user['email']}")
+    # Check if user is authenticated
+    if session.get('authenticated') and session.get('access_token'):
+        logger.info(f"✅ User authenticated: {session.get('user_email')}")
                         
-                        # Set up local session
-                        user_info = {
-                            'sub': auth_user['sub'],
-                            'email': auth_user['email'],
-                            'name': auth_user['email'].split('@')[0]
-                        }
+        # Check if we need to generate a Llama Stack token
+        if not session.get('llama_stack_token'):
+            logger.info("🔄 User has OIDC token but no Llama Stack token - needs exchange")
                         
-                        session['authenticated'] = True
-                        session['bearer_token'] = llama_stack_token
-                        session['mcp_tokens'] = {}
-                        session['user_info'] = user_info
-                        session['user_name'] = user_info['name']
-                        session['user_email'] = user_info['email']
-                        session.permanent = True
-                        
-                        return render_template('chat.html',
-                                             user_name=session.get('user_name', 'User'),
-                                             user_email=session.get('user_email', ''))
-        except Exception as e:
-            logger.error(f"Error verifying session: {e}")
+        return render_template('chat.html',
+            user_name=session.get('user_name', 'User'),
+            user_email=session.get('user_email', ''))
     
-    # No valid session - clear everything and show login
+    # No valid session - show login
     logger.info("❌ No valid session found")
+    logger.info(f"🔍 Session data before clear: {dict(session)}")
     session.clear()
     return render_template('login.html')
 
 @app.route('/login')
 def login():
-    """Start OAuth flow - redirect to auth server with callback to chat app"""
-    logger.info(f"🔐 Starting OAuth flow")
-    import secrets
-    state = secrets.token_urlsafe(16)
+    """Start OIDC OAuth flow"""
+    logger.info(f"🔐 Starting OIDC OAuth flow")
+    
+    # Generate state for CSRF protection
+    state = secrets.token_urlsafe(32)
     session['oauth_state'] = state
     
-    # Redirect to auth server OAuth with callback to chat app
-    oauth_url = f"{AUTH_SERVER_URL}/auth/authorize?client_id=chat-ui&response_type=code&redirect_uri=http://localhost:5001/callback&state={state}&scope=llama_stack"
+    # Generate PKCE verifier and challenge
+    code_verifier = secrets.token_urlsafe(96)  # Must be between 43-128 chars
+    code_verifier_bytes = code_verifier.encode('ascii')
+    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier_bytes).digest()).decode('ascii').rstrip('=')
+    
+    # Store verifier in session for later
+    session['code_verifier'] = code_verifier
+    
+    # Build authorization URL
+    config = asyncio.run(get_oidc_configuration())
+    if not config:
+        return "Could not get OIDC configuration", 500
+        
+    authorization_endpoint = config.get('authorization_endpoint')
+    if not authorization_endpoint:
+        return "No authorization endpoint found", 500
+    
+    params = {
+        'client_id': OIDC_CLIENT_ID,
+        'response_type': 'code',
+        'scope': 'openid profile email',  # Only basic OIDC scopes for login
+        'redirect_uri': REDIRECT_URI,
+        'state': state,
+        'code_challenge': code_challenge,
+        'code_challenge_method': 'S256'
+    }
+    
+    oauth_url = f"{authorization_endpoint}?{urllib.parse.urlencode(params)}"
+    logger.info(f"🔗 Redirecting to: {oauth_url}")
     return redirect(oauth_url)
 
 @app.route('/callback')
 def callback():
-    """Handle OAuth callback and create Llama Stack token"""
-    logger.info(f"🔍 OAuth callback received")
+    """Handle OIDC OAuth callback"""
+    logger.info(f"🔍 OIDC OAuth callback received")
+    logger.info(f"🔍 Query params: {dict(request.args)}")
+    logger.info(f"🔍 Current session: {dict(session)}")
     
     code = request.args.get('code')
     state = request.args.get('state')
+    error = request.args.get('error')
+    
+    if error:
+        logger.error(f"❌ OAuth error: {error}")
+        return redirect('/')
     
     # Verify state parameter
     if not state or state != session.get('oauth_state'):
-        logger.error("❌ Invalid OAuth state")
+        logger.error(f"❌ Invalid OAuth state. Got: {state}, Expected: {session.get('oauth_state')}")
         return redirect('/')
     
     if not code:
         logger.error("❌ No authorization code received")
         return redirect('/')
     
+    # Get code verifier from session
+    code_verifier = session.get('code_verifier')
+    if not code_verifier:
+        logger.error("❌ No code verifier found in session")
+        return redirect('/')
+    
+    # Exchange code for token
+    result = asyncio.run(exchange_code_for_token(code, state, code_verifier))
+    logger.info(f"🔍 Token exchange result: {result.get('success')}")
+            
+    if result['success']:
+        user_info = result['user_info']
+        access_token = result['access_token']
+        
+        logger.info(f"🎫 Received access token: {access_token[:50]}...{access_token[-20:]}")
+        logger.info(f"👤 User info: {user_info}")
+        
+        # Store basic user info in session
+        session['authenticated'] = True
+        session['user_email'] = user_info.get('email', user_info.get('preferred_username', 'unknown'))
+        session['user_name'] = user_info.get('name', user_info.get('preferred_username', session['user_email'].split('@')[0]))
+        session['access_token'] = access_token
+        session['user_info'] = user_info
+        session.permanent = True
+        session.modified = True
+        
+        logger.info(f"✅ User authenticated: {session['user_email']}")
+        logger.info(f"🔍 Session after auth: {dict(session)}")
+        
+        # Log environment configuration for debugging
+        logger.info(f"🔧 OIDC Config: client_id={OIDC_CLIENT_ID}, issuer={OIDC_ISSUER_URL}")
+        logger.info(f"🔧 Client secret configured: {bool(OIDC_CLIENT_SECRET)}")
+        
+        # IMMEDIATELY exchange for specialized tokens
+        llama_stack_result = asyncio.run(exchange_for_llama_stack_token(access_token))
+        mcp_result = asyncio.run(exchange_for_mcp_token(access_token))
+        
+        if llama_stack_result['success']:
+            session['llama_stack_token'] = llama_stack_result['token']
+            logger.info(f"🦙 Llama Stack token obtained: {llama_stack_result['token'][:50]}...{llama_stack_result['token'][-20:]}")
+        else:
+            logger.error(f"❌ Llama Stack token exchange failed: {llama_stack_result.get('error')}")
+            
+        if mcp_result['success']:
+            session['mcp_token'] = mcp_result['token']
+            logger.info(f"🔧 MCP token obtained: {mcp_result['token'][:50]}...{mcp_result['token'][-20:]}")
+        else:
+            logger.error(f"❌ MCP token exchange failed: {mcp_result.get('error')}")
+        
+        # Store token in cache
+        token_cache[session['user_email']] = {
+            'access_token': access_token,
+            'llama_stack_token': session.get('llama_stack_token'),
+            'mcp_token': session.get('mcp_token'),
+            'user_info': user_info,
+            'token_data': result['token_data']
+        }
+        
+        logger.info(f"🔍 Final session keys: {list(session.keys())}")
+        logger.info(f"🔍 Final session: {dict(session)}")
+        
+        response = redirect('/')
+        logger.info(f"🔍 Response headers: {dict(response.headers)}")
+        return response
+    else:
+        logger.error(f"❌ Authentication failed: {result['error']}")
+        return redirect('/')
+
+@app.route('/logout')
+def logout():
+    """Logout user and clear session"""
+    logger.info(f"🚪 User logout")
+    
+    # Clear token cache
+    user_email = session.get('user_email')
+    if user_email and user_email in token_cache:
+        del token_cache[user_email]
+    
+    # Clear session
+    session.clear()
+    
+    # Force logout from Keycloak with proper parameters
+    config = asyncio.run(get_oidc_configuration())
+    if config and config.get('end_session_endpoint'):
+        logout_params = {
+            'post_logout_redirect_uri': 'http://localhost:5001',
+            'client_id': OIDC_CLIENT_ID
+        }
+        logout_url = f"{config['end_session_endpoint']}?{urllib.parse.urlencode(logout_params)}"
+        logger.info(f"🔗 Keycloak logout URL: {logout_url}")
+        return redirect(logout_url)
+    
+    return redirect('/')
+
+@app.route('/api/user-status')
+def user_status():
+    """Get current user authentication status"""
+    if session.get('authenticated'):
+        return jsonify({
+            'authenticated': True,
+            'user': {
+                'email': session.get('user_email'),
+                'name': session.get('user_name'),
+                'sub': session.get('user_info', {}).get('sub', '')
+            }
+        })
+    else:
+        return jsonify({'authenticated': False}), 401
+
+@app.route('/debug/session')
+def debug_session():
+    """Debug session contents"""
+    logger.info("🔍 Debug session accessed")
+    logger.info(f"🔍 Session data: {dict(session)}")
+    logger.info(f"🔍 Session keys: {list(session.keys())}")
+    logger.info(f"🔍 Token cache keys: {list(token_cache.keys()) if token_cache else []}")
+    
+    if session.get('authenticated'):
+        logger.info("🔍 Session shows authenticated - redirecting to main page")
+        return redirect('/')
+    else:
+        logger.info("🔍 Session not authenticated - showing login")
+        return redirect('/login')
+
+@app.route('/debug/token')
+def debug_token():
+    """Debug endpoint to show current access token"""
+    if 'authenticated' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    access_token = session.get('access_token')
+    if access_token:
+        return jsonify({
+            'access_token': access_token,
+            'user_email': session.get('user_email'),
+            'token_length': len(access_token),
+            'token_preview': f"{access_token[:20]}...{access_token[-20:]}"
+        })
+    else:
+        return jsonify({'error': 'No access token in session'}), 404
+
+async def exchange_code_for_token(code: str, state: str, code_verifier: str) -> dict:
+    """Exchange authorization code for access token"""
     try:
-        # Exchange code for tokens via auth server
-        import httpx
-        with httpx.Client() as client:
-            # First, complete OAuth flow with auth server
-            response = client.post(
-                f"{AUTH_SERVER_URL}/auth/token",
+        config = await get_oidc_configuration()
+        if not config:
+            return {'success': False, 'error': 'OIDC configuration not available'}
+        
+        token_endpoint = config.get('token_endpoint')
+        userinfo_endpoint = config.get('userinfo_endpoint')
+        
+        if not token_endpoint or not userinfo_endpoint:
+            return {'success': False, 'error': 'Missing OIDC endpoints'}
+        
+        async with httpx.AsyncClient() as client:
+            # Exchange code for token
+            response = await client.post(
+                token_endpoint,
                 data={
                     'grant_type': 'authorization_code',
                     'code': code,
-                    'redirect_uri': 'http://localhost:5001/callback',
-                    'client_id': 'chat-ui'
+                    'redirect_uri': REDIRECT_URI,
+                    'client_id': OIDC_CLIENT_ID,
+                    'client_secret': OIDC_CLIENT_SECRET,
+                    'code_verifier': code_verifier
                 },
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
                 timeout=10.0
             )
             
             if response.status_code == 200:
                 token_data = response.json()
-                auth_session_token = token_data.get('session_token')
+                access_token = token_data.get('access_token')
                 
-                if auth_session_token:
-                    # Now request Llama Stack token
-                    llama_response = client.post(
-                        f"{AUTH_SERVER_URL}/api/initial-token",
-                        json={
-                            "resource": LLAMA_STACK_URL,
-                            "scopes": []
-                        },
-                        cookies={'auth_session': auth_session_token},
+                if access_token:
+                    # Get user info
+                    user_response = await client.get(
+                        userinfo_endpoint,
+                        headers={'Authorization': f'Bearer {access_token}'},
                         timeout=10.0
                     )
                     
-                    if llama_response.status_code == 200:
-                        llama_token_data = llama_response.json()
-                        # Handle new response format
-                        llama_stack_token = llama_token_data.get('token')  # Changed from 'access_token' to 'token'
-                        
-                        if llama_stack_token:
-                            logger.info("✅ Llama Stack token obtained")
-                            
-                            # Now discover MCP servers from Llama Stack toolgroups
-                            try:
-                                logger.info("🔍 Starting MCP server discovery from Llama Stack toolgroups")
-                                
-                                # Query Llama Stack for toolgroups
-                                toolgroups_response = client.get(
-                                    f"{LLAMA_STACK_URL}/v1/toolgroups",
-                                    headers={"Authorization": f"Bearer {llama_stack_token}"},
-                                    timeout=10.0
-                                )
-                                
-                                logger.info(f"🔍 DEBUG: Toolgroups response status: {toolgroups_response.status_code}")
-                                
-                                if toolgroups_response.status_code == 200:
-                                    toolgroups_data = toolgroups_response.json()
-                                    logger.info(f"✅ Found toolgroups response")
-                                    logger.info(f"🔍 DEBUG: Toolgroups data: {toolgroups_data}")
-                                    
-                                    # Extract toolgroups from the 'data' field
-                                    toolgroups_list = toolgroups_data.get('data', [])
-                                    logger.info(f"🔍 Found {len(toolgroups_list)} toolgroups in data")
-                                    
-                                    # Extract MCP server URLs from toolgroups
-                                    mcp_server_urls = []
-                                    for i, toolgroup in enumerate(toolgroups_list):
-                                        logger.info(f"🔍 DEBUG: Processing toolgroup {i}: {toolgroup}")
-                                        
-                                        # Toolgroup must be a dict with identifier starting with 'mcp::'
-                                        if not isinstance(toolgroup, dict):
-                                            logger.error(f"❌ CONFIGURATION ERROR: Toolgroup {i} is not a dict: {type(toolgroup)}")
-                                            continue
-                                        
-                                        toolgroup_id = toolgroup.get('identifier', '')
-                                        if not toolgroup_id.startswith('mcp::'):
-                                            logger.info(f"🔍 DEBUG: Skipping non-MCP toolgroup: {toolgroup_id}")
-                                            continue
-                                        
-                                        logger.info(f"🔍 DEBUG: Found MCP toolgroup: {toolgroup_id}")
-                                        
-                                        # MCP server URL is in mcp_endpoint.uri
-                                        mcp_endpoint = toolgroup.get('mcp_endpoint', {})
-                                        if not isinstance(mcp_endpoint, dict):
-                                            logger.error(f"❌ CONFIGURATION ERROR: MCP toolgroup '{toolgroup_id}' has invalid mcp_endpoint: {mcp_endpoint}")
-                                            continue
-                                        
-                                        mcp_url = mcp_endpoint.get('uri')
-                                        if not mcp_url:
-                                            logger.error(f"❌ CONFIGURATION ERROR: MCP toolgroup '{toolgroup_id}' missing 'mcp_endpoint.uri' field")
-                                            logger.error(f"❌ Available toolgroup fields: {list(toolgroup.keys())}")
-                                            logger.error(f"❌ MCP endpoint fields: {list(mcp_endpoint.keys()) if mcp_endpoint else 'None'}")
-                                            continue
-                                        
-                                        # Strip /sse suffix to get base URL for service discovery
-                                        base_mcp_url = mcp_url.rstrip('/sse')
-                                        
-                                        mcp_server_urls.append(base_mcp_url)
-                                        logger.info(f"✅ Found MCP server: {base_mcp_url} (endpoint: {mcp_url})")
-                                    
-                                    logger.info(f"🔍 Discovered {len(mcp_server_urls)} MCP servers from toolgroups: {mcp_server_urls}")
-                                    
-                                    # Fail early if no MCP servers found
-                                    if not mcp_server_urls:
-                                        logger.error("❌ CONFIGURATION ERROR: No MCP servers found in toolgroups")
-                                        logger.error("❌ This indicates a fundamental Llama Stack configuration issue")
-                                        logger.error("❌ Check your Llama Stack run.yml configuration")
-                                        # Continue without MCP discovery
-                                    else:
-                                        # Run service discovery on each MCP server
-                                        logger.info(f"🔍 Running service discovery on {len(mcp_server_urls)} MCP servers")
-                                        
-                                        import asyncio
-                                        from utils.service_discovery import MCPServiceDiscovery
-                                        
-                                        async def run_discovery():
-                                            discovery = MCPServiceDiscovery()
-                                            discovered_configs = await discovery.discover_all_mcp_servers(mcp_server_urls)
-                                            logger.info(f"🔍 DEBUG: Service discovery results: {discovered_configs}")
-                                            return discovered_configs
-                                        
-                                        # Run service discovery
-                                        discovered_configs = asyncio.run(run_discovery())
-                                        logger.info(f"✅ Service discovery completed: {len(discovered_configs)} MCP servers configured")
-                                        
-                                        # Store discovered configs in session for future use
-                                        session['discovered_mcp_configs'] = discovered_configs
-                                        logger.info(f"🔍 DEBUG: Stored discovered configs in session: {list(discovered_configs.keys())}")
-                                        
-                                        # Log what we found
-                                        for mcp_url, config in discovered_configs.items():
-                                            auth_server = config.get('authorization_server', 'Unknown')
-                                            logger.info(f"🔍 MCP Server: {mcp_url} -> Auth Server: {auth_server}")
-                                        
-                                        # Generate MCP tokens immediately while we have request context
-                                        logger.info(f"🔍 DEBUG: Generating MCP tokens immediately after discovery")
-                                        
-                                        # Get user email from auth server
-                                        user_response = client.get(
-                                            f"{AUTH_SERVER_URL}/api/user-status", 
-                                            cookies={'auth_session': auth_session_token},
-                                            timeout=5.0
-                                        )
-                                        
-                                        if user_response.status_code == 200:
-                                            user_data = user_response.json()
-                                            user_email = user_data.get('user', {}).get('email')
-                                            
-                                            if user_email:
-                                                logger.info(f"🔍 DEBUG: Generating MCP tokens for user: {user_email}")
-                                                
-                                                # Generate tokens for each discovered MCP server
-                                                for mcp_server_url, config in discovered_configs.items():
-                                                    auth_server_url = config.get('authorization_server')
-                                                    if not auth_server_url:
-                                                        logger.warning(f"⚠️ No auth server found for MCP server: {mcp_server_url}")
-                                                        continue
-                                                    
-                                                    logger.info(f"🔍 DEBUG: Generating token for MCP server: {mcp_server_url}")
-                                                    logger.info(f"🔍 DEBUG: Using auth server: {auth_server_url}")
-                                                    
-                                                    # Request MCP token with no specific scope (basic access)
-                                                    try:
-                                                        token_response = client.post(
-                                                            f"{auth_server_url}/api/upgrade-scope",
-                                                            json={
-                                                                "resource": mcp_server_url,
-                                                                "scopes": [],  # Empty scopes for basic access
-                                                                "current_token": "",
-                                                                "justification": "Initial MCP token generation during OAuth flow"
-                                                            },
-                                                            cookies={'auth_session': auth_session_token},
-                                                            timeout=10.0
-                                                        )
-                                                        
-                                                        if token_response.status_code == 200:
-                                                            token_data = token_response.json()
-                                                            if token_data.get('new_token'):
-                                                                logger.info(f"✅ Generated MCP token for {mcp_server_url}: {token_data['new_token'][:20]}...")
-                                                            else:
-                                                                logger.error(f"❌ No new_token in response for {mcp_server_url}: {token_data}")
-                                                        else:
-                                                            logger.error(f"❌ Failed to generate MCP token for {mcp_server_url}: {token_response.status_code}")
-                                                            logger.error(f"❌ Response: {token_response.text}")
-                                                    
-                                                    except Exception as token_error:
-                                                        logger.error(f"❌ Error generating token for {mcp_server_url}: {token_error}")
-                                                
-                                                logger.info(f"✅ MCP token generation completed for {user_email}")
-                                            else:
-                                                logger.error("❌ Could not get user email for MCP token generation")
-                                        else:
-                                            logger.error(f"❌ Could not get user info for MCP token generation: {user_response.status_code}")
-                                
-                                else:
-                                    logger.error(f"❌ Failed to query toolgroups: {toolgroups_response.status_code}")
-                                    logger.error(f"❌ Response body: {toolgroups_response.text}")
-                                    
-                            except Exception as e:
-                                logger.error(f"❌ Error during MCP discovery: {e}")
-                                import traceback
-                                logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-                                # Continue anyway - discovery is optional
-                            
-                            logger.info("✅ MCP discovery completed - tokens will be generated on-demand")
-                            
-                            # Set cookies and redirect to chat
-                            response = make_response(redirect('/'))
-                            response.set_cookie(
-                                'auth_session',
-                                auth_session_token,
-                                max_age=3600,
-                                httponly=True,
-                                secure=False,
-                                samesite='lax'
-                            )
-                            response.set_cookie(
-                                'llama_stack_token',
-                                llama_stack_token,
-                                max_age=3600,
-                                httponly=False,  # Allow JavaScript access for admin dashboard
-                                secure=False,
-                                samesite='lax'
-                            )
-                            logger.info("✅ OAuth flow completed successfully")
-                            return response
-                        else:
-                            logger.error(f"❌ No token in response: {llama_token_data}")
-                    else:
-                        logger.error(f"❌ Failed to get Llama Stack token: {llama_response.status_code} - {llama_response.text}")
-                else:
-                    logger.error("❌ No auth session token received")
-            
-            logger.error(f"❌ OAuth token exchange failed: {response.status_code}")
-            
-    except Exception as e:
-        logger.error(f"❌ OAuth callback error: {e}")
-    
-    # If we get here, something went wrong
-    return redirect('/')
-
-@app.route('/logout')
-def logout():
-    """Logout and clear session"""
-    # Clear local session
-    session.clear()
-    
-    # Clear cookies and redirect to auth server logout
-    response = make_response(redirect(f"{AUTH_SERVER_URL}/auth/logout"))
-    response.set_cookie('auth_session', '', expires=0)
-    response.set_cookie('llama_stack_token', '', expires=0)
-    return response
-
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'chat-ui',
-        'version': '1.0.0'
-    })
-
-def get_base_mcp_url(mcp_server_url: str) -> str:
-    """Get base MCP URL by stripping /sse suffix if present"""
-    if mcp_server_url.endswith('/sse'):
-        return mcp_server_url[:-4]
-    return mcp_server_url
-
-def get_mcp_tokens_for_user(user_email: str) -> dict:
-    """Get MCP tokens for a user from auth server database"""
-    try:
-        import httpx
-        # Get tokens from auth server database
-        response = httpx.get(
-            f"{AUTH_SERVER_URL}/api/user-mcp-tokens",
-            params={"user_email": user_email},
-            timeout=5.0
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                tokens = result.get("tokens", {})
-                logger.info(f"🔐 Found {len(tokens)} MCP tokens for {user_email} from auth server")
-                return tokens
+                    if user_response.status_code == 200:
+                        user_info = user_response.json()
+                        return {
+                            'success': True,
+                            'user_info': user_info,
+                            'access_token': access_token,
+                            'token_data': token_data
+                        }
+                
+                return {'success': False, 'error': 'Invalid token response'}
             else:
-                logger.warning(f"⚠️ Failed to get MCP tokens: {result.get('error', 'Unknown error')}")
-                return {}
-        else:
-            logger.error(f"❌ Failed to retrieve MCP tokens: {response.status_code}")
-            return {}
-    
+                logger.error(f"❌ Token exchange failed: {response.status_code} - {response.text}")
+                return {'success': False, 'error': f'Token exchange failed: {response.status_code}'}
+                
     except Exception as e:
-        logger.error(f"❌ Error retrieving MCP tokens for {user_email}: {e}")
-        return {}
-
-def store_mcp_token_for_user(user_email: str, server_url: str, token: str):
-    """Store MCP token for a user in auth server database"""
-    # Note: This function is now primarily for backward compatibility
-    # MCP tokens are generated on-demand when tools require them
-    # But we still provide this for any edge cases that might call it
-    logger.info(f"✅ MCP token storage request for {user_email} -> {server_url} (tokens now generated on-demand)")
+        logger.error(f"❌ Error exchanging code for token: {e}")
+        return {'success': False, 'error': str(e)}
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Chat UI Frontend...")
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    logger.info("🚀 Starting Chat UI (Keycloak Edition)")
+    logger.info(f"🔐 OIDC Issuer: {OIDC_ISSUER_URL}")
+    logger.info(f"🔐 OIDC Client: {OIDC_CLIENT_ID}")
+    logger.info(f"🦙 Llama Stack: {LLAMA_STACK_URL}")
+    
+    app.run(
+        host='0.0.0.0',
+        port=int(os.getenv('CHAT_UI_PORT', 5001)),
+        debug=os.getenv('FLASK_ENV') == 'development'
+    ) 

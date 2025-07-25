@@ -28,7 +28,7 @@ providers:
         responses_store:
           type: sqlite
           db_path: ./responses.db
-        auth_endpoint: "http://localhost:8002/"
+        auth_endpoint: "http://localhost:8002/realms/authentication-demo/"
   tool_runtime:
     - provider_id: model-context-protocol
       provider_type: remote::model-context-protocol
@@ -62,6 +62,8 @@ server:
     provider_type: "oauth2_token"
     config:
       jwks:
-        uri: "http://localhost:8002/.well-known/jwks.json"
-      issuer: "http://localhost:8002"
-      audience: "http://localhost:8321"
+        uri: "http://localhost:8002/realms/authentication-demo/protocol/openid-connect/certs"
+      issuer: "http://localhost:8002/realms/authentication-demo"
+      audience: "authentication-demo"
+      claims_mapping:
+        principal: "preferred_username"

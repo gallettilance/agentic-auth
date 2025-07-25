@@ -13,10 +13,9 @@ import sqlite3
 import time
 
 # Import from our utility modules using absolute imports
-from utils.auth_utils import check_auth_server_session_direct, is_authorization_error, extract_authorization_error_details
+from utils.auth_utils import is_authorization_error, extract_authorization_error_details
 from utils.streaming_utils import stream_agent_response_with_auth_detection
 from utils.llama_agents_utils import send_message_to_llama_stack, get_or_create_user_agent, get_or_create_session_for_user
-from utils.mcp_tokens_utils import get_mcp_tokens_for_user_direct, AUTH_SERVER_URL
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -33,14 +32,9 @@ pending_messages = {}
 def chat():
     """Handle chat messages with streaming support"""
     try:
-        # Always verify auth server session first
-        auth_user = check_auth_server_session_direct()
-        if not auth_user:
+        # Check authentication using Flask session (Keycloak authenticated)
+        if not session.get('authenticated'):
             return jsonify({'error': 'Not authenticated - please login', 'success': False}), 401
-        
-        # Ensure local session is up to date
-        if session.get('user_email') != auth_user['email']:
-            return jsonify({'error': 'Session mismatch - please refresh page', 'success': False}), 401
     
         data = request.get_json()
         if not data:
@@ -54,10 +48,10 @@ def chat():
         # Check if streaming is requested
         stream = data.get('stream', False)
         
-        # Get or create bearer token on-demand (only when actually needed)
-        bearer_token = session.get('bearer_token')
+        # Get or create Llama Stack token on-demand (only when actually needed)
+        bearer_token = session.get('llama_stack_token')
         if not bearer_token:
-            logger.info("🔐 No bearer token found - will create on-demand when agent needs MCP tools")
+            logger.info("🔐 No Llama Stack token found - will create on-demand when agent needs MCP tools")
             # Use a placeholder token that will trigger proper error handling
             bearer_token = "NO_TOKEN_YET"
         
@@ -67,6 +61,7 @@ def chat():
             # Stream the response, but include special markers for authorization errors
             try:
                 auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
+                mcp_token = session.get('mcp_token')  # Get MCP token from session while in request context
                 return Response(
                     stream_agent_response_with_auth_detection(
                         message, 
@@ -74,7 +69,8 @@ def chat():
                         session.get('user_email', ''),
                         message,
                         auth_cookies,
-                        0  # retry_count
+                        0,  # retry_count
+                        mcp_token  # Pass MCP token to avoid context issues
                     ),
                     mimetype='text/plain'
                 )
@@ -101,7 +97,7 @@ def chat():
                     pending_messages[message_id] = {
                         'message': message,
                         'user_email': session.get('user_email', ''),
-                        'bearer_token': session.get('bearer_token', 'NO_TOKEN_YET'),
+                        'bearer_token': session.get('llama_stack_token', 'NO_TOKEN_YET'),
                         'timestamp': datetime.now().isoformat()
                     }
                     
@@ -157,16 +153,16 @@ def get_chat_history():
             return jsonify({'error': 'Not authenticated'}), 401
         
         user_email = session.get('user_email')
-        bearer_token = session.get('bearer_token')
+        bearer_token = session.get('llama_stack_token')
         
         if not user_email:
             return jsonify({'error': 'User email not found in session'}), 400
         
         if not bearer_token:
-            return jsonify({'error': 'Bearer token not found in session'}), 400
+            return jsonify({'error': 'Llama Stack token not found in session'}), 400
         
         logger.info(f"🔍 Chat history request for {user_email}")
-        logger.info(f"🔍 Bearer token present: {bool(bearer_token)}")
+        logger.info(f"🔍 Llama Stack token present: {bool(bearer_token)}")
         
         # Get agent and session ID (this will check cache first, then Flask session)
         logger.info(f"🔄 Getting agent and session for {user_email}")
@@ -347,13 +343,13 @@ def clear_chat_history():
             return jsonify({'error': 'Not authenticated'}), 401
         
         user_email = session.get('user_email')
-        bearer_token = session.get('bearer_token')
+        bearer_token = session.get('llama_stack_token')
         
         if not user_email:
             return jsonify({'error': 'User email not found in session'}), 400
         
         if not bearer_token:
-            return jsonify({'error': 'Bearer token not found in session'}), 400
+            return jsonify({'error': 'Llama Stack token not found in session'}), 400
         
         logger.info(f"🗑️ Clearing chat history for {user_email}")
         
@@ -443,7 +439,7 @@ def handle_consent_response():
             async def update_consent_response():
                 async with httpx.AsyncClient() as client:
                     response = await client.put(
-                        f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
+                        f'http://localhost:8002/api/consent-requests/{consent_id}',
                         json={
                             'status': 'completed' if approved else 'denied',
                             'response': approved

@@ -16,11 +16,10 @@ from utils.mcp_tokens_utils import (
     get_mcp_tokens_for_user_direct, 
     store_mcp_token_for_user_direct,
     get_base_mcp_url,
-    request_scope_upgrade,
-    request_mcp_token,
     prepare_mcp_headers_for_user
 )
 from utils.llama_agents_utils import get_or_create_session_for_user
+from typing import Optional
 
 # Global variable for simple consent mechanism
 user_consent_response = None
@@ -132,7 +131,7 @@ def create_auth_error_response(error_details: dict, message: str, user_email: st
     
     return f"__AUTH_ERROR_START__{auth_error_json}__AUTH_ERROR_END__"
 
-def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0):
+def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0, mcp_token: Optional[str] = None):
     """Stream agent response with clean authorization error detection and automatic token exchange"""
     # Import here to avoid circular imports
     from utils.llama_agents_utils import get_or_create_session_for_user
@@ -152,8 +151,8 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
         from llama_stack_client.types import UserMessage
         user_message = UserMessage(content=message, role="user")
         
-        # Prepare MCP authentication headers
-        extra_headers = prepare_mcp_headers_for_user(user_email)
+        # Prepare MCP authentication headers using provided token
+        extra_headers = prepare_mcp_headers_for_user(user_email, mcp_token)
         
         # Send to agent with streaming enabled
         response = agent.create_turn(
@@ -197,218 +196,79 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                 # Prevent infinite retry loops
                 if retry_count >= 2:
                     logger.error(f"❌ Maximum retry attempts reached ({retry_count}), giving up")
-                    yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the auth dashboard."
+                    yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the admin dashboard."
                     return
                 
-                # Attempt to exchange MCP token
-                token_exchanged = False
-                try:
-                    logger.info(f"🔄 Attempting to exchange MCP token for scope: {required_scope}, server: {mcp_server_url}")
+                # For Keycloak: Use token exchange API to get additional scope
+                logger.info(f"🔄 Attempting Keycloak token exchange for scope: {required_scope}")
                     
-                    # Get auth cookies - use passed cookies or try to get from request context
-                    request_auth_cookies = auth_cookies
-                    if not request_auth_cookies:
-                        try:
-                            from flask import request
-                            request_auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
-                        except RuntimeError:
-                            # Not in request context, use empty dict
-                            request_auth_cookies = {}
-                    
-                    # Get current MCP token to upgrade rather than create new one
-                    current_mcp_tokens = get_mcp_tokens_for_user_direct(user_email)
-                    # Use base URL for token lookup since tokens are stored with base URLs as keys
-                    base_mcp_url = get_base_mcp_url(mcp_server_url)
-                    current_token = current_mcp_tokens.get(base_mcp_url, '')
-                    
-                    if current_token:
-                        logger.info(f"🔄 Found existing MCP token for {base_mcp_url}, will upgrade it")
-                    else:
-                        logger.info(f"🔐 No existing MCP token for {base_mcp_url}, requesting initial token")
-                    
-                    # Try to get upgraded MCP token
-                    # For InsufficientScopeError, we need to request approval, not just exchange existing tokens
-                    if error_details.get('error_type') == 'insufficient_scope':
-                        logger.info(f"🔐 Insufficient scope detected - requesting approval for scope: {required_scope}")
-                        # Use request_scope_upgrade to actually request approval from admin
-                        from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                        token_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token, request_auth_cookies, auth_server_url=AUTH_SERVER_URL, resource=base_mcp_url, current_token=current_token))
-                    else:
-                        logger.info(f"🔐 Authorization error - requesting MCP token for scope: {required_scope}")
-                        # Use request_mcp_token for other authorization errors (use base_mcp_url for correct audience)
-                        from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                        token_result = asyncio.run(request_mcp_token(required_scope, base_mcp_url, current_token, request_auth_cookies, AUTH_SERVER_URL))
-                    
-                    if token_result and not token_result.get('error'):
-                        # Check if this was an approval request that needs admin approval FIRST
-                        status = token_result.get('status')
-                        if status == 'pending_admin_approval':
-                            logger.info(f"🔔 Approval request submitted to admin for scope: {required_scope}")
-                            # Generate proper authorization error response for frontend
-                            auth_error_response = create_auth_error_response(error_details, original_message, user_email, bearer_token)
-                            yield auth_error_response
-                            return  # Don't retry immediately, wait for admin approval
-                        
-                        new_token = token_result.get('access_token') or token_result.get('new_token')
-                        if new_token:
-                            # Only ask for user consent if this was AUTO-APPROVED (has a new token ready)
-                            # If it requires manual approval, we already handled it above
-                            logger.info(f"🔐 Auto-approved scope received new token, asking for user consent")
-                            
-                            import uuid
-                            import httpx
-                            consent_id = str(uuid.uuid4())
-                            
-                            # Store consent request in auth server database FIRST
-                            logger.info(f"🔍 DEBUG: Storing consent request in auth server before notifying frontend...")
-                            try:
-                                from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                                async def store_consent_request():
-                                    async with httpx.AsyncClient() as client:
-                                        await client.post(
-                                            f'{AUTH_SERVER_URL}/api/consent-requests',
-                                            json={
-                                                'consent_id': consent_id,
-                                                'user_email': user_email,
-                                                'tool_name': tool_name,
-                                                'required_scope': required_scope,
-                                                'mcp_server_url': mcp_server_url,
-                                                'status': 'pending'
-                                            },
-                                            timeout=5.0
-                                        )
-                                asyncio.run(store_consent_request())
-                                logger.info(f"✅ Stored consent request {consent_id} in auth server")
-                                
-                                # Immediately trigger consent popup via direct frontend notification
-                                yield f"data: {{\"type\": \"consent_required\", \"consent_id\": \"{consent_id}\", \"tool_name\": \"{tool_name}\", \"required_scope\": \"{required_scope}\"}}\n\n"
-                                
-                            except Exception as e:
-                                logger.error(f"❌ Failed to store consent request: {e}")
-                                yield f"❌ Error storing consent request.\n"
-                                return
-                            
-                            # Wait for user response using auth server database
-                            logger.info(f"🔍 DEBUG: Waiting for consent response for {consent_id}")
-                            yield f"🔐 Waiting for permission to use {tool_name} with scope {required_scope}...\n"
-                            
-                            # Wait for consent response from auth server
-                            timeout_count = 0
-                            user_approved = None
-                            
-                            while user_approved is None and timeout_count < 120:  # 60 second timeout
-                                try:
-                                    async def check_consent_response():
-                                        async with httpx.AsyncClient() as client:
-                                            response = await client.get(
-                                                f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
-                                                timeout=5.0
-                                            )
-                                            if response.status_code == 200:
-                                                data = response.json()
-                                                return data.get('status'), data.get('response')
-                                            return None, None
-                                    
-                                    status, response = asyncio.run(check_consent_response())
-                                    
-                                    if status == 'completed':
-                                        user_approved = response
-                                        logger.info(f"✅ Consent response received: {user_approved}")
-                                        break
-                                    elif status == 'denied':
-                                        user_approved = False
-                                        logger.info(f"❌ Consent denied")
-                                        break
-                                        
-                                except Exception as e:
-                                    logger.error(f"Error checking consent: {e}")
-                                    
-                                logger.info(f"Waiting for consent response... attempt {timeout_count}")
-                                time.sleep(0.5)
-                                timeout_count += 1
-                            
-                            if user_approved is None:
-                                yield f"⏰ Consent request timed out. Please try again.\n"
-                                return
-                            
-                            # Check if user approved
-                            if not user_approved:
-                                yield f"❌ Permission denied. Cannot proceed with {tool_name}.\n"
-                                return
-                            
-                            yield f"✅ Permission approved. Storing token...\n"
-                            
-                            # Store MCP token using helper function (use base_mcp_url for consistency)
-                            store_mcp_token_for_user_direct(user_email, base_mcp_url, new_token)
-                            logger.info(f"✅ Stored MCP token for {base_mcp_url} via helper function")
-                            
-                            # Update MCP token cookie for admin dashboard access
-                            try:
-                                import httpx
-                                async def update_cookie():
-                                    async with httpx.AsyncClient() as client:
-                                        await client.post(
-                                            'http://localhost:5001/api/update-mcp-token-cookie',
-                                            json={
-                                                'server_url': base_mcp_url,
-                                                'token': new_token
-                                            },
-                                            timeout=5.0
-                                        )
-                                asyncio.run(update_cookie())
-                                logger.info(f"✅ Updated MCP token cookie for admin dashboard")
-                            except Exception as cookie_error:
-                                logger.warning(f"⚠️ Failed to update MCP token cookie: {cookie_error}")
-                            
-                            # DEBUG: Verify the token was stored correctly
-                            stored_tokens = get_mcp_tokens_for_user_direct(user_email)
-                            base_mcp_url = get_base_mcp_url(mcp_server_url)
-                            stored_token = stored_tokens.get(base_mcp_url, '')
-                            logger.info(f"🔍 DEBUG: Stored token verification for {user_email} -> {base_mcp_url}: {stored_token[:20] if stored_token else 'NONE'}...")
-                            logger.info(f"🔍 DEBUG: All stored tokens for {user_email}: {list(stored_tokens.keys())}")
-                            
-                            token_exchanged = True
-                            
-                            if status == 'approved':
-                                logger.info(f"✅ Scope {required_scope} approved, proceeding with retry")
-                        else:
-                            logger.warning(f"⚠️ Token request returned success but no token: {token_result}")
-                    else:
-                        logger.warning(f"⚠️ Token request failed: {token_result.get('error', 'Unknown error')}")
-                        
-                        # Check if this was a pending approval case
-                        if 'pending' in str(token_result.get('error', '')).lower():
-                            logger.info(f"🔔 Approval request is pending for scope: {required_scope}")
-                            yield f"🔔 Approval request for {tool_name} ({required_scope}) is pending administrator approval.\n\n"
-                            return  # Don't retry immediately, wait for admin approval
-                        
-                except Exception as token_error:
-                    logger.error(f"❌ Token exchange failed with exception: {token_error}")
+                # Ensure scope has proper prefix
+                if not required_scope.startswith('mcp:'):
+                    required_scope = f'mcp:{required_scope}'
                 
-                # If token exchange succeeded, retry the request
-                if token_exchanged:
-                    logger.info(f"🔄 Token exchanged successfully, retrying request (attempt {retry_count + 1})")
-                    yield f"🔐 Obtained authorization for {tool_name}, retrying request...\n\n"
+                try:
+                    # Import the token exchange function from our API
+                    import sys
+                    import os
+                    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                     
-                    # DEBUG: Check what tokens are available before retry
-                    debug_tokens = get_mcp_tokens_for_user_direct(user_email)
-                    logger.info(f"🔍 DEBUG: Before retry - available tokens for {user_email}: {list(debug_tokens.keys())}")
+                    # Use the existing Keycloak token exchange endpoint
+                    from api.tokens import exchange_token_for_audience
+                    import asyncio
                     
-                    # Retry the request with the new token
-                    try:
+                    access_token = session.get('access_token')
+                    if not access_token:
+                        logger.error("❌ No access token available for token exchange")
+                        yield f"❌ Authentication error - please re-login\n"
+                        return
+                    
+                    # Get current MCP token scopes
+                    current_mcp_token = session.get('mcp_token')
+                    current_scopes = []
+                    if current_mcp_token:
+                        try:
+                            import jwt
+                            decoded = jwt.decode(current_mcp_token, options={"verify_signature": False})
+                            current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
+                        except Exception:
+                            pass
+                    
+                    # Add the required scope to current scopes
+                    if required_scope not in current_scopes:
+                        current_scopes.append(required_scope)
+                    
+                    # Exchange token for new scopes using Keycloak
+                    OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
+                    result = asyncio.run(exchange_token_for_audience(
+                        access_token=access_token,
+                        audience=OIDC_CLIENT_ID,  # Self-exchange
+                        scopes=current_scopes
+                    ))
+                    
+                    if result.get('success'):
+                        # Store the new MCP token
+                        new_mcp_token = result['access_token']
+                        session['mcp_token'] = new_mcp_token
+                        logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
+                        
+                        # Retry the original request with new token
+                        yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
+                    
+                        # Recursive retry with incremented count
                         for retry_chunk in stream_agent_response_with_auth_detection(
-                            message, bearer_token, user_email, original_message, request_auth_cookies, retry_count + 1
+                            message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token
                         ):
                             yield retry_chunk
                         return
-                    except Exception as retry_error:
-                        logger.error(f"❌ Retry failed: {retry_error}")
-                        yield f"❌ Retry failed: {str(retry_error)}"
+                    else:
+                        error_msg = result.get('error', 'Unknown error')
+                        logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
+                        yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
                         return
-                else:
-                    # Token exchange failed, return error response for manual handling
-                    logger.warning(f"⚠️ Automatic token exchange failed, returning error for manual handling")
-                    yield f"❌ Authorization failed for {tool_name}. Please check permissions in the auth dashboard."
+                        
+                except Exception as e:
+                    logger.error(f"❌ Exception during token exchange: {e}")
+                    yield f"❌ Failed to acquire permission for `{tool_name}`: {str(e)}\n"
                     return
             
             if content_to_yield:
@@ -445,218 +305,79 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
             # Prevent infinite retry loops
             if retry_count >= 2:
                 logger.error(f"❌ Maximum retry attempts reached ({retry_count}), giving up")
-                yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the auth dashboard."
+                yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the admin dashboard."
                 return
             
-            # Attempt to exchange MCP token
-            token_exchanged = False
+            # For Keycloak: Use token exchange API to get additional scope
+            logger.info(f"🔄 Attempting Keycloak token exchange for scope: {required_scope}")
+                
+            # Ensure scope has proper prefix
+            if not required_scope.startswith('mcp:'):
+                required_scope = f'mcp:{required_scope}'
+            
             try:
-                logger.info(f"🔄 Attempting to exchange MCP token for scope: {required_scope}, server: {mcp_server_url}")
+                # Import the token exchange function from our API
+                import sys
+                import os
+                sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 
-                # Get auth cookies - use passed cookies or try to get from request context
-                request_auth_cookies = auth_cookies
-                if not request_auth_cookies:
+                # Use the existing Keycloak token exchange endpoint
+                from api.tokens import exchange_token_for_audience
+                import asyncio
+                
+                access_token = session.get('access_token')
+                if not access_token:
+                    logger.error("❌ No access token available for token exchange")
+                    yield f"❌ Authentication error - please re-login\n"
+                    return
+                
+                # Get current MCP token scopes
+                current_mcp_token = session.get('mcp_token')
+                current_scopes = []
+                if current_mcp_token:
                     try:
-                        from flask import request
-                        request_auth_cookies = {'auth_session': request.cookies.get('auth_session')} if request.cookies.get('auth_session') else {}
-                    except RuntimeError:
-                        # Not in request context, use empty dict
-                        request_auth_cookies = {}
+                        import jwt
+                        decoded = jwt.decode(current_mcp_token, options={"verify_signature": False})
+                        current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
+                    except Exception:
+                        pass
                 
-                # Get current MCP token to upgrade rather than create new one
-                current_mcp_tokens = get_mcp_tokens_for_user_direct(user_email)
-                # Use base URL for token lookup since tokens are stored with base URLs as keys
-                base_mcp_url = get_base_mcp_url(mcp_server_url)
-                current_token = current_mcp_tokens.get(base_mcp_url, '')
+                # Add the required scope to current scopes
+                if required_scope not in current_scopes:
+                    current_scopes.append(required_scope)
                 
-                if current_token:
-                    logger.info(f"🔄 Found existing MCP token for {base_mcp_url}, will upgrade it")
-                else:
-                    logger.info(f"🔐 No existing MCP token for {base_mcp_url}, requesting initial token")
+                # Exchange token for new scopes using Keycloak
+                OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
+                result = asyncio.run(exchange_token_for_audience(
+                    access_token=access_token,
+                    audience=OIDC_CLIENT_ID,  # Self-exchange
+                    scopes=current_scopes
+                ))
                 
-                # Try to get upgraded MCP token
-                # For InsufficientScopeError, we need to request approval, not just exchange existing tokens
-                if error_details.get('error_type') == 'insufficient_scope':
-                    logger.info(f"🔐 Insufficient scope detected - requesting approval for scope: {required_scope}")
-                    # Use request_scope_upgrade to actually request approval from admin
-                    from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                    token_result = asyncio.run(request_scope_upgrade(required_scope, bearer_token, request_auth_cookies, auth_server_url=AUTH_SERVER_URL, resource=base_mcp_url, current_token=current_token))
-                else:
-                    logger.info(f"🔐 Authorization error - requesting MCP token for scope: {required_scope}")
-                    # Use request_mcp_token for other authorization errors (use base_mcp_url for correct audience)
-                    from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                    token_result = asyncio.run(request_mcp_token(required_scope, base_mcp_url, current_token, request_auth_cookies, AUTH_SERVER_URL))
-                
-                if token_result and not token_result.get('error'):
-                    # Check if this was an approval request that needs admin approval FIRST
-                    status = token_result.get('status')
-                    if status == 'pending_admin_approval':
-                        logger.info(f"🔔 Approval request submitted to admin for scope: {required_scope}")
-                        # Generate proper authorization error response for frontend
-                        auth_error_response = create_auth_error_response(error_details, original_message, user_email, bearer_token)
-                        yield auth_error_response
-                        return  # Don't retry immediately, wait for admin approval
+                if result.get('success'):
+                    # Store the new MCP token
+                    new_mcp_token = result['access_token']
+                    session['mcp_token'] = new_mcp_token
+                    logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
                     
-                    new_token = token_result.get('access_token') or token_result.get('new_token')
-                    if new_token:
-                        # Only ask for user consent if this was AUTO-APPROVED (has a new token ready)
-                        # If it requires manual approval, we already handled it above
-                        logger.info(f"🔐 Auto-approved scope received new token, asking for user consent")
-                        
-                        import uuid
-                        import httpx
-                        consent_id = str(uuid.uuid4())
-                        
-                        # Store consent request in auth server database FIRST
-                        logger.info(f"🔍 DEBUG: Storing consent request in auth server before notifying frontend...")
-                        try:
-                            from utils.mcp_tokens_utils import AUTH_SERVER_URL
-                            async def store_consent_request():
-                                async with httpx.AsyncClient() as client:
-                                    await client.post(
-                                        f'{AUTH_SERVER_URL}/api/consent-requests',
-                                        json={
-                                            'consent_id': consent_id,
-                                            'user_email': user_email,
-                                            'tool_name': tool_name,
-                                            'required_scope': required_scope,
-                                            'mcp_server_url': mcp_server_url,
-                                            'status': 'pending'
-                                        },
-                                        timeout=5.0
-                                    )
-                            asyncio.run(store_consent_request())
-                            logger.info(f"✅ Stored consent request {consent_id} in auth server")
-                            
-                            # Immediately trigger consent popup via direct frontend notification
-                            yield f"data: {{\"type\": \"consent_required\", \"consent_id\": \"{consent_id}\", \"tool_name\": \"{tool_name}\", \"required_scope\": \"{required_scope}\"}}\n\n"
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Failed to store consent request: {e}")
-                            yield f"❌ Error storing consent request.\n"
-                            return
-                        
-                        # Wait for user response using auth server database
-                        logger.info(f"🔍 DEBUG: Waiting for consent response for {consent_id}")
-                        yield f"🔐 Waiting for permission to use {tool_name} with scope {required_scope}...\n"
-                        
-                        # Wait for consent response from auth server
-                        timeout_count = 0
-                        user_approved = None
-                        
-                        while user_approved is None and timeout_count < 120:  # 60 second timeout
-                            try:
-                                async def check_consent_response():
-                                    async with httpx.AsyncClient() as client:
-                                        response = await client.get(
-                                            f'{AUTH_SERVER_URL}/api/consent-requests/{consent_id}',
-                                            timeout=5.0
-                                        )
-                                        if response.status_code == 200:
-                                            data = response.json()
-                                            return data.get('status'), data.get('response')
-                                        return None, None
-                                
-                                status, response = asyncio.run(check_consent_response())
-                                
-                                if status == 'completed':
-                                    user_approved = response
-                                    logger.info(f"✅ Consent response received: {user_approved}")
-                                    break
-                                elif status == 'denied':
-                                    user_approved = False
-                                    logger.info(f"❌ Consent denied")
-                                    break
-                                    
-                            except Exception as e:
-                                logger.error(f"Error checking consent: {e}")
-                                
-                            logger.info(f"Waiting for consent response... attempt {timeout_count}")
-                            time.sleep(0.5)
-                            timeout_count += 1
-                        
-                        if user_approved is None:
-                            yield f"⏰ Consent request timed out. Please try again.\n"
-                            return
-                        
-                        # Check if user approved
-                        if not user_approved:
-                            yield f"❌ Permission denied. Cannot proceed with {tool_name}.\n"
-                            return
-                        
-                        yield f"✅ Permission approved. Storing token...\n"
-                        
-                        # Store MCP token using helper function (use base_mcp_url for consistency)
-                        store_mcp_token_for_user_direct(user_email, base_mcp_url, new_token)
-                        logger.info(f"✅ Stored MCP token for {base_mcp_url} via helper function")
-                        
-                        # Update MCP token cookie for admin dashboard access
-                        try:
-                            import httpx
-                            async def update_cookie():
-                                async with httpx.AsyncClient() as client:
-                                    await client.post(
-                                        'http://localhost:5001/api/update-mcp-token-cookie',
-                                        json={
-                                            'server_url': base_mcp_url,
-                                            'token': new_token
-                                        },
-                                        timeout=5.0
-                                    )
-                            asyncio.run(update_cookie())
-                            logger.info(f"✅ Updated MCP token cookie for admin dashboard")
-                        except Exception as cookie_error:
-                            logger.warning(f"⚠️ Failed to update MCP token cookie: {cookie_error}")
-                        
-                        # DEBUG: Verify the token was stored correctly
-                        stored_tokens = get_mcp_tokens_for_user_direct(user_email)
-                        base_mcp_url = get_base_mcp_url(mcp_server_url)
-                        stored_token = stored_tokens.get(base_mcp_url, '')
-                        logger.info(f"🔍 DEBUG: Stored token verification for {user_email} -> {base_mcp_url}: {stored_token[:20] if stored_token else 'NONE'}...")
-                        logger.info(f"🔍 DEBUG: All stored tokens for {user_email}: {list(stored_tokens.keys())}")
-                        
-                        token_exchanged = True
-                        
-                        if status == 'approved':
-                            logger.info(f"✅ Scope {required_scope} approved, proceeding with retry")
-                    else:
-                        logger.warning(f"⚠️ Token request returned success but no token: {token_result}")
-                else:
-                    logger.warning(f"⚠️ Token request failed: {token_result.get('error', 'Unknown error')}")
-                    
-                    # Check if this was a pending approval case
-                    if 'pending' in str(token_result.get('error', '')).lower():
-                        logger.info(f"🔔 Approval request is pending for scope: {required_scope}")
-                        yield f"🔔 Approval request for {tool_name} ({required_scope}) is pending administrator approval.\n\n"
-                        return  # Don't retry immediately, wait for admin approval
-                        
-            except Exception as token_error:
-                logger.error(f"❌ Token exchange failed with exception: {token_error}")
+                    # Retry the original request with new token
+                    yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
                 
-            # If token exchange succeeded, retry the request
-            if token_exchanged:
-                logger.info(f"🔄 Token exchanged successfully, retrying request (attempt {retry_count + 1})")
-                yield f"🔐 Obtained authorization for {tool_name}, retrying request...\n\n"
-                
-                # DEBUG: Check what tokens are available before retry
-                debug_tokens = get_mcp_tokens_for_user_direct(user_email)
-                logger.info(f"🔍 DEBUG: Before retry - available tokens for {user_email}: {list(debug_tokens.keys())}")
-                
-                # Retry the request with the new token
-                try:
+                    # Recursive retry with incremented count
                     for retry_chunk in stream_agent_response_with_auth_detection(
-                        message, bearer_token, user_email, original_message, request_auth_cookies, retry_count + 1
+                        message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token
                     ):
                         yield retry_chunk
                     return
-                except Exception as retry_error:
-                    logger.error(f"❌ Retry failed: {retry_error}")
-                    yield f"❌ Retry failed: {str(retry_error)}"
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
+                    yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
                     return
-            else:
-                # Token exchange failed, return error response for manual handling
-                logger.warning(f"⚠️ Automatic token exchange failed, returning error for manual handling")
-                yield f"❌ Authorization failed for {tool_name}. Please check permissions in the auth dashboard."
+                    
+            except Exception as e:
+                logger.error(f"❌ Exception during token exchange: {e}")
+                yield f"❌ Failed to acquire permission for `{tool_name}`: {str(e)}\n"
                 return
         
         # For other errors, yield error message

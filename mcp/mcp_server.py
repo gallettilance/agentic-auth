@@ -22,15 +22,18 @@ SERVER_HOST = "localhost"
 SERVER_PORT = 8001
 SERVER_URI = f"http://{SERVER_HOST}:{SERVER_PORT}"
 
-# Auth Server Configuration
-AUTH_SERVER_URI = "http://localhost:8002"  # The authentication server
+# Keycloak Configuration (updated for Token Exchange V2)
+KEYCLOAK_REALM_URL = "http://localhost:8002/realms/authentication-demo"
+JWKS_URI = f"{KEYCLOAK_REALM_URL}/protocol/openid-connect/certs"
+ISSUER = KEYCLOAK_REALM_URL
+CLIENT_ID = "authentication-demo"  # Token Exchange V2 uses client ID as audience
 
-# Create Bearer Auth Provider
+# Create Bearer Auth Provider for Keycloak
 auth = BearerAuthProvider(
-    jwks_uri=f"{AUTH_SERVER_URI}/.well-known/jwks.json",
-    issuer=AUTH_SERVER_URI,
+    jwks_uri=JWKS_URI,
+    issuer=ISSUER,
     algorithm="RS256",
-    audience=SERVER_URI
+    audience=CLIENT_ID  # Token Exchange V2: tokens have client ID as audience
 )
 
 # Create FastMCP instance with native scope enforcement
@@ -38,22 +41,20 @@ mcp = FastMCP(
     name=SERVER_NAME,
     version=SERVER_VERSION,
     auth=auth,
-    middleware=[ErrorHandlingMiddleware()]  # ← This is crucial!
+    middleware=[ErrorHandlingMiddleware()]
 )
 
-logger.info(f"🔐 MCP Server using FastMCP with native scope enforcement")
-logger.info(f"🔑 JWKS URI: {AUTH_SERVER_URI}/.well-known/jwks.json")
-logger.info(f"🎯 Expected Audience: {SERVER_URI}")
-logger.info(f"🏢 Expected Issuer: {AUTH_SERVER_URI}")
+logger.info(f"🔐 MCP Server using Keycloak authentication")
+logger.info(f"🔑 JWKS URI: {JWKS_URI}")
+logger.info(f"🎯 Expected Audience: {CLIENT_ID}")
+logger.info(f"🏢 Expected Issuer: {ISSUER}")
 logger.info(f"📝 Algorithm: RS256")
-logger.info(f"🎯 DEBUG: MCP server will ONLY accept tokens with audience='{SERVER_URI}'")
-
 
 # ============================================================================
 # MCP TOOLS - Using FastMCP's native required_scope parameter
 # ============================================================================
 
-@mcp.tool(required_scope="list_files")
+@mcp.tool(required_scope="mcp:list_files")
 async def list_files(directory: str = ".") -> Dict[str, Any]:
     """
     List files in a directory.
@@ -102,7 +103,7 @@ async def list_files(directory: str = ".") -> Dict[str, Any]:
         "count": len(files)
     }
 
-@mcp.tool(required_scope="execute_command")
+@mcp.tool(required_scope="mcp:execute_command")
 async def execute_command(command: str) -> Dict[str, Any]:
     """
     Execute a safe system command.
@@ -138,8 +139,6 @@ async def execute_command(command: str) -> Dict[str, Any]:
         )
         
         logger.info(f"✅ Command executed successfully - Exit code: {result.returncode}")
-        logger.info(f"📊 stdout length: {len(result.stdout)} characters")
-        logger.info(f"📊 stderr length: {len(result.stderr)} characters")
         
         return {
             "success": True,
@@ -157,7 +156,7 @@ async def execute_command(command: str) -> Dict[str, Any]:
             "command": command
         }
 
-@mcp.tool(required_scope="get_server_info")
+@mcp.tool(required_scope="mcp:get_server_info")
 async def get_server_info() -> Dict[str, Any]:
     """
     Get server information and authentication status.
@@ -166,19 +165,18 @@ async def get_server_info() -> Dict[str, Any]:
         Dictionary containing server information
     """
     logger.info(f"🔧 Tool called: get_server_info()")
-    logger.info("ℹ️ Getting server info")
     
     return {
         "server_name": SERVER_NAME,
         "server_version": SERVER_VERSION,
         "server_uri": SERVER_URI,
-        "auth_server_uri": AUTH_SERVER_URI,
+        "keycloak_realm": KEYCLOAK_REALM_URL,
         "timestamp": datetime.now().isoformat(),
-        "auth_method": "FastMCP with Native Scope Enforcement",
+        "auth_method": "Keycloak OIDC with FastMCP",
         "message": "Authentication successful - you have access to this MCP server"
     }
 
-@mcp.tool(required_scope="health_check")
+@mcp.tool(required_scope="mcp:health_check")
 async def health_check() -> Dict[str, Any]:
     """
     Check server health and authentication status.
@@ -187,17 +185,17 @@ async def health_check() -> Dict[str, Any]:
         Dictionary containing health check information
     """
     logger.info(f"🔧 Tool called: health_check()")
-    logger.info("🏥 Performing health check")
     
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "server_name": SERVER_NAME,
         "server_version": SERVER_VERSION,
-        "auth_method": "FastMCP with Native Scope Enforcement"
+        "auth_method": "Keycloak OIDC with FastMCP",
+        "keycloak_realm": KEYCLOAK_REALM_URL
     }
 
-@mcp.tool(required_scope="list_tool_scopes")
+@mcp.tool(required_scope="mcp:list_tool_scopes")
 async def list_tool_scopes() -> Dict[str, Any]:
     """
     List all available tools and their required scopes.
@@ -206,35 +204,32 @@ async def list_tool_scopes() -> Dict[str, Any]:
         Dictionary containing tool scope mappings
     """
     logger.info(f"🔧 Tool called: list_tool_scopes()")
-    logger.info("📋 Listing tool scopes")
     
-    # Static mapping of tool scopes - in a real implementation, this could be dynamic
     tool_scopes = {
         "list_files": {
             "description": "List files in a directory",
-            "required_scope": "list_files"
+            "required_scope": "mcp:list_files"
         },
         "execute_command": {
             "description": "Execute a safe system command",
-            "required_scope": "execute_command"
+            "required_scope": "mcp:execute_command"
         },
         "get_server_info": {
             "description": "Get server information and authentication status",
-            "required_scope": "get_server_info"
+            "required_scope": "mcp:get_server_info"
         },
         "health_check": {
             "description": "Check server health and authentication status",
-            "required_scope": "health_check"
+            "required_scope": "mcp:health_check"
         },
         "list_tool_scopes": {
             "description": "List all available tools and their required scopes",
-            "required_scope": "list_tool_scopes"
-        },
+            "required_scope": "mcp:list_tool_scopes"
+        }
     }
     
-    logger.info("✅ Tool scopes listed successfully")
     return {
-        "auth_method": "FastMCP with Native Scope Enforcement",
+        "auth_method": "Keycloak OIDC with FastMCP",
         "tool_scopes": tool_scopes,
         "total_tools": len(tool_scopes)
     }
@@ -244,11 +239,9 @@ if __name__ == "__main__":
     logger.info("="*80)
     logger.info(f"🚀 Starting {SERVER_NAME} v{SERVER_VERSION}")
     logger.info(f"🌐 Server URI: {SERVER_URI}")
-    logger.info(f"🔐 Auth server: {AUTH_SERVER_URI}")
-    logger.info("🔒 Auth method: FastMCP with Native Scope Enforcement")
-    logger.info("🛠️ Available tools: list_files, execute_command, get_server_info, get_oauth_metadata, health_check, list_tool_scopes, verify_domain")
-    logger.info("🔐 Scope validation: FastMCP native required_scope parameter")
-    logger.info("📊 Debug logging enabled for comprehensive authentication flow debugging")
+    logger.info(f"🔐 Keycloak realm: {KEYCLOAK_REALM_URL}")
+    logger.info("🔒 Auth method: Keycloak OIDC with FastMCP")
+    logger.info("🛠️ Available tools: list_files, execute_command, get_server_info, health_check, list_tool_scopes")
     logger.info("="*80)
     
     mcp.run("sse") 

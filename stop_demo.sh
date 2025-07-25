@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# 🛑 Stop Unified Authentication & Authorization Demo Services
+# 🛑 Stop Unified Authentication & Authorization Demo Services (Keycloak Edition)
 
-echo "🛑 Stopping Unified Authentication & Authorization Demo..."
-echo "========================================================"
+echo "🛑 Stopping Unified Authentication & Authorization Demo (Keycloak Edition)..."
+echo "=========================================================================="
 
 # Colors for output
 RED='\033[0;31m'
@@ -41,14 +41,13 @@ stop_by_pid() {
 # Read PIDs from file if it exists
 if [ -f demo_pids.txt ]; then
     echo "📋 Reading process IDs from demo_pids.txt..."
-    read AUTH_PID ADMIN_PID MCP_PID LLAMA_PID FRONTEND_PID < demo_pids.txt
+    read ADMIN_PID MCP_PID LLAMA_PID FRONTEND_PID < demo_pids.txt
     
     # Stop services by PID
     stop_by_pid "$FRONTEND_PID" "Chat Frontend"
     stop_by_pid "$LLAMA_PID" "Llama Stack"
     stop_by_pid "$ADMIN_PID" "Admin Dashboard"
     stop_by_pid "$MCP_PID" "MCP Server"
-    stop_by_pid "$AUTH_PID" "Auth Server"
     
     # Remove PID file
     rm -f demo_pids.txt
@@ -63,8 +62,83 @@ echo "🔍 Checking ports for any remaining processes..."
 stop_by_port 5001 "Chat Frontend"
 stop_by_port 8321 "Llama Stack"
 stop_by_port 8003 "Admin Dashboard"
-stop_by_port 8002 "Auth Server"
 stop_by_port 8001 "MCP Server"
+
+# Stop Keycloak
+echo ""
+echo -e "${BLUE}🔐 Stopping Keycloak...${NC}"
+if docker ps -q -f name=keycloak | grep -q .; then
+    echo -e "${YELLOW}🔄 Stopping Keycloak container...${NC}"
+    docker stop keycloak >/dev/null 2>&1
+    echo -e "${GREEN}✅ Keycloak stopped${NC}"
+else
+    echo -e "${YELLOW}⚠️  Keycloak container not running${NC}"
+fi
+
+# Note about Keycloak
+echo ""
+echo -e "${BLUE}ℹ️  Note: Keycloak container is preserved for next start${NC}"
+echo -e "${BLUE}   Use: ./cleanup_demo.sh to remove it completely${NC}"
+
+# Clear Keycloak SSO session
+echo ""
+echo "🔐 Clearing Keycloak SSO session..."
+
+clear_keycloak_sso() {
+    # Check if Keycloak is running
+    if lsof -Pi :8002 -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo -e "${YELLOW}🔄 Logging out from Keycloak SSO...${NC}"
+        
+        if command -v curl >/dev/null 2>&1; then
+            # Method 1: Clear all sessions via admin API
+            echo -e "${YELLOW}🔄 Clearing all user sessions via admin API...${NC}"
+            
+            # Get admin token
+            ADMIN_TOKEN=$(curl -s -X POST http://localhost:8002/realms/master/protocol/openid-connect/token \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "username=admin&password=admin123&grant_type=password&client_id=admin-cli" | \
+                python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || true
+            
+            if [ -n "$ADMIN_TOKEN" ]; then
+                # Clear all user sessions in the realm
+                curl -s -X DELETE \
+                    "http://localhost:8002/admin/realms/authentication-demo/sessions" \
+                    -H "Authorization: Bearer $ADMIN_TOKEN" \
+                    -H "Content-Type: application/json" >/dev/null 2>&1 || true
+                    
+                # Also clear all offline sessions
+                curl -s -X DELETE \
+                    "http://localhost:8002/admin/realms/authentication-demo/sessions/offline" \
+                    -H "Authorization: Bearer $ADMIN_TOKEN" \
+                    -H "Content-Type: application/json" >/dev/null 2>&1 || true
+                    
+                echo -e "${GREEN}✅ All user sessions cleared via admin API${NC}"
+            else
+                echo -e "${YELLOW}⚠️  Could not get admin token - trying direct logout${NC}"
+                
+                # Method 2: Force logout by hitting logout endpoint with proper params
+                LOGOUT_URL="http://localhost:8002/realms/authentication-demo/protocol/openid-connect/logout"
+                curl -s -X POST "$LOGOUT_URL" \
+                    -H "Content-Type: application/x-www-form-urlencoded" \
+                    -d "client_id=authentication-demo&post_logout_redirect_uri=http://localhost:5001" \
+                    >/dev/null 2>&1 || true
+                    
+                # Also try the end session endpoint
+                END_SESSION_URL="http://localhost:8002/realms/authentication-demo/protocol/openid-connect/logout"
+                curl -s -X GET "$END_SESSION_URL?client_id=authentication-demo&post_logout_redirect_uri=http://localhost:5001" \
+                    >/dev/null 2>&1 || true
+                    
+                echo -e "${GREEN}✅ Keycloak logout endpoints called${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠️  curl not available - Keycloak SSO session may persist${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Keycloak not running on port 8002 - skipping SSO logout${NC}"
+    fi
+}
+
+clear_keycloak_sso
 
 # Force quit Chrome and clear authentication cookies
 echo ""
@@ -85,11 +159,14 @@ cleanup_chrome_cookies() {
         CHROME_COOKIES="$HOME/.config/google-chrome/Default/Cookies"
     fi
     
-    # Clear Chrome localhost cookies
+    # Clear Chrome localhost and Keycloak cookies
     if [ -f "$CHROME_COOKIES" ] && command -v sqlite3 >/dev/null 2>&1; then
-        echo -e "${YELLOW}🔄 Clearing Chrome localhost cookies...${NC}"
+        echo -e "${YELLOW}🔄 Clearing Chrome localhost and Keycloak cookies...${NC}"
+        # Clear localhost cookies (app sessions)
         sqlite3 "$CHROME_COOKIES" "DELETE FROM cookies WHERE host_key LIKE '%localhost%' OR host_key LIKE '%.localhost%';" 2>/dev/null || true
-        echo -e "${GREEN}✅ Chrome localhost cookies cleared${NC}"
+        # Clear any Keycloak-related cookies
+        sqlite3 "$CHROME_COOKIES" "DELETE FROM cookies WHERE name LIKE '%keycloak%' OR name LIKE '%KEYCLOAK%' OR name LIKE '%KC_%';" 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome localhost and Keycloak cookies cleared${NC}"
     else
         echo -e "${YELLOW}⚠️  Chrome cookies database not found or sqlite3 not available${NC}"
         echo -e "${YELLOW}   Chrome may not be installed or cookies are in a different location${NC}"
@@ -119,22 +196,12 @@ if [ -f "kvstore.db" ]; then
     # echo -e "${GREEN}✅ Removed kvstore.db${NC}"
 fi
 
-# Clean up auth database (optional - preserves user permissions if kept)
-if [ -f "auth-server/auth.db" ]; then
-    echo -e "${YELLOW}📊 Auth database found at auth-server/auth.db${NC}"
-    echo -e "${YELLOW}   Contains user accounts, roles, and permissions${NC}"
-    echo -e "${YELLOW}   To reset all users/permissions: rm auth-server/auth.db${NC}"
-    # Uncomment the next line to auto-delete database on stop:
-    # rm -f auth-server/auth.db
-    # echo -e "${GREEN}✅ Removed auth-server/auth.db${NC}"
-fi
-
 # Clean up any remaining processes
 echo ""
 echo "🧹 Cleaning up any remaining demo processes..."
 
 # Kill any remaining Python processes that might be part of the demo
-REMAINING_PIDS=$(ps aux | grep -E "(auth_server|unified_auth_server|mcp_server|chat_app|admin_dashboard)" | grep -v grep | awk '{print $2}')
+REMAINING_PIDS=$(ps aux | grep -E "(mcp_server|chat_app|admin_dashboard)" | grep -v grep | awk '{print $2}')
 
 if [ -n "$REMAINING_PIDS" ]; then
     echo -e "${YELLOW}🔄 Killing remaining demo processes...${NC}"
@@ -152,17 +219,18 @@ fi
 
 echo ""
 echo -e "${GREEN}🎉 All demo services stopped successfully!${NC}"
+echo -e "${GREEN}🔐 Keycloak SSO session cleared - you'll need to login again${NC}"
 echo ""
 echo "📝 Data preserved for next restart:"
 echo "├── logs/ - Server logs"
-echo "├── auth-server/auth.db - User accounts and permissions"
-echo "├── auth-server/keys/ - JWT signing keys"
 echo "├── responses.db - Chat history (if exists)"
 echo "└── kvstore.db - Application state (if exists)"
 echo ""
 echo -e "${BLUE}🔄 Next steps:${NC}"
 echo "   🚀 Restart demo: ./start_demo.sh"
 echo "   🧹 Complete reset: ./cleanup_demo.sh"
+echo "   🛑 Stop Keycloak: ./stop_keycloak.sh"
 echo ""
-echo -e "${YELLOW}💡 Tip: This preserves all user data and permissions${NC}"
+echo -e "${YELLOW}💡 Tip: This preserves all chat history and application state${NC}"
+echo -e "${YELLOW}     Keycloak SSO session has been cleared for clean login${NC}"
 echo -e "${YELLOW}     For a fresh start, use ./cleanup_demo.sh${NC}" 

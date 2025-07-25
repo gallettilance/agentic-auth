@@ -648,6 +648,11 @@
             color: #721c24;
         }
         
+        .token-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
         .token-preview {
             font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
             font-size: 12px;
@@ -828,8 +833,11 @@
                 <div class="token-section-header">
                     🔧 MCP Server Tokens (Tool Authentication)
                 </div>
-                <div id="mcp-tokens-container">
+                <div class="token-item" id="mcp-token-item">
                     <!-- Content will be populated by JavaScript -->
+                </div>
+                <div id="mcp-tokens-container">
+                    <!-- Legacy container for multiple MCP servers (if needed) -->
                 </div>
             </div>
         </div>
@@ -1754,14 +1762,17 @@
             // Initialize token dashboard
             refreshTokenDashboard();
             
-            // Start periodic token update checking
-            setInterval(checkForTokenUpdates, 5000); // Check every 5 seconds
+            // Start periodic token update checking - DISABLED: we now auto-generate tokens
+            // setInterval(checkForTokenUpdates, 5000); // Check every 5 seconds
             
             // Clean up old pending requests every minute
             setInterval(cleanupOldPendingRequests, 60000);
             
-            // Refresh token dashboard every 10 seconds
-            setInterval(refreshTokenDashboard, 10000);
+            // Auto-refresh dashboard every 30 seconds (reduced from 10 seconds)
+            setInterval(refreshTokenDashboard, 30000);
+            
+            // Remove token update polling - we now auto-generate tokens
+            // setInterval(checkForTokenUpdates, 5000);
         });
 
         // Token Dashboard Functions
@@ -1781,16 +1792,37 @@
 
         async function refreshTokenDashboard() {
             try {
+                console.log('🔄 Fetching token info from /api/token-info');
                 const response = await fetch('/api/token-info');
+                console.log('📡 Response status:', response.status);
+                
                 if (response.ok) {
                     const data = await response.json();
+                    console.log('📊 Token data received:', data);
+                    
                     updateLlamaStackTokenDisplay(data.llama_stack_token);
-                    updateMCPTokensDisplay(data.mcp_tokens);
+                    
+                    // Handle the new single MCP token
+                    if (data.mcp_token) {
+                        updateMCPTokenDisplay(data.mcp_token);
+                    }
+                    // Handle legacy MCP tokens structure if it exists  
+                    if (data.mcp_tokens) {
+                        updateMCPTokensDisplay(data.mcp_tokens);
+                    }
+                    
+                                    // Tokens are exchanged automatically during login callback
+                    
+                } else {
+                    console.error('❌ Token info request failed:', response.status, response.statusText);
                 }
             } catch (error) {
-                console.error('Error refreshing token dashboard:', error);
+                console.error('❌ Error refreshing token dashboard:', error);
             }
         }
+
+        // Tokens are now exchanged automatically during login callback
+        // Dashboard just displays current token status
 
         function updateLlamaStackTokenDisplay(tokenInfo) {
             const container = document.getElementById('llama-stack-token-item');
@@ -1802,34 +1834,34 @@
                 
                 container.innerHTML = `
                     <div class="token-info">
-                        <span class="token-type">🎫 Llama Stack Authentication</span>
+                        <span class="token-type">🎫 Llama Stack Token</span>
                         <span class="token-status token-available">✅ Available</span>
                     </div>
                     <div class="token-preview">${escapeHtml(preview)}</div>
-                    <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'http://localhost:8321')}</code></div>
+                    <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'llama-stack')}</code></div>
                     <div>Scopes: <code>${tokenInfo.scopes ? tokenInfo.scopes.join(', ') : 'None'}</code></div>
+                    ${tokenInfo.roles ? `<div>Roles: <code>${tokenInfo.roles.join(', ')}</code></div>` : ''}
                     <div class="token-actions">
                         <a href="${buildJwtIoUrl(tokenInfo.token)}" target="_blank" class="jwt-link">
                             🔍 Debug on JWT.io
                         </a>
-                        <button class="refresh-token-btn" onclick="refreshLlamaStackToken()">
-                            🔄 Refresh Token
-                        </button>
                     </div>
                 `;
             } else {
+                const status = tokenInfo ? tokenInfo.status : 'unknown';
+                const message = tokenInfo ? tokenInfo.message : 'Token not obtained during login - check logs';
+                
                 container.innerHTML = `
                     <div class="token-info">
-                        <span class="token-type">🎫 Llama Stack Authentication</span>
-                        <span class="token-status token-missing">❌ Missing</span>
+                        <span class="token-type">🎫 Llama Stack Token</span>
+                        <span class="token-status token-error">❌ ${status}</span>
                     </div>
-                    <div style="color: #6c757d; font-style: italic;">
-                        No Llama Stack token available. This is required for agent communication.
+                    <div style="color: #dc3545; font-style: italic;">
+                        ${escapeHtml(message)}
                     </div>
-                    <div class="token-actions">
-                        <button class="refresh-token-btn" onclick="refreshLlamaStackToken()">
-                            🔄 Get Token
-                        </button>
+                    <div>Expected Audience: <code>llama-stack</code></div>
+                    <div style="color: #6c757d; font-size: 0.9em; margin-top: 8px;">
+                        💡 Tokens are exchanged automatically during login. Check browser console and server logs for errors.
                     </div>
                 `;
             }
@@ -2025,6 +2057,81 @@
                     notification.parentNode.removeChild(notification);
                 }
             }, 4000);
+        }
+
+        async function refreshMCPTokenNew() {
+            const button = event.target;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = '🔄 Generating...';
+            
+            try {
+                const response = await fetch('/api/refresh-mcp-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        refreshTokenDashboard();
+                        showNotification('✅ MCP token generated successfully!', 'success');
+                    } else {
+                        throw new Error(data.error || 'Failed to generate token');
+                    }
+                } else {
+                    throw new Error('Failed to generate token');
+                }
+            } catch (error) {
+                console.error('Error generating MCP token:', error);
+                showNotification('❌ Failed to generate MCP token', 'error');
+            } finally {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        }
+
+        function updateMCPTokenDisplay(tokenInfo) {
+            const container = document.getElementById('mcp-token-item');
+            
+            if (tokenInfo && tokenInfo.token) {
+                const preview = tokenInfo.token.length > 50 
+                    ? tokenInfo.token.substring(0, 50) + '...' 
+                    : tokenInfo.token;
+                
+                container.innerHTML = `
+                    <div class="token-info">
+                        <span class="token-type">🔧 MCP Token</span>
+                        <span class="token-status token-available">✅ Available</span>
+                    </div>
+                    <div class="token-preview">${escapeHtml(preview)}</div>
+                    <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'mcp-server')}</code></div>
+                    <div>Scopes: <code>${tokenInfo.scopes ? tokenInfo.scopes.join(', ') : 'None'}</code></div>
+                    ${tokenInfo.roles ? `<div>Roles: <code>${tokenInfo.roles.join(', ')}</code></div>` : ''}
+                    <div class="token-actions">
+                        <a href="${buildJwtIoUrl(tokenInfo.token)}" target="_blank" class="jwt-link">
+                            🔍 Debug on JWT.io
+                        </a>
+                    </div>
+                `;
+            } else {
+                const status = tokenInfo ? tokenInfo.status : 'unknown';
+                const message = tokenInfo ? tokenInfo.message : 'Token not obtained during login - check logs';
+                
+                container.innerHTML = `
+                    <div class="token-info">
+                        <span class="token-type">🔧 MCP Token</span>
+                        <span class="token-status token-error">❌ ${status}</span>
+                    </div>
+                    <div style="color: #dc3545; font-style: italic;">
+                        ${escapeHtml(message)}
+                    </div>
+                    <div>Expected Audience: <code>mcp-server</code></div>
+                    <div style="color: #6c757d; font-size: 0.9em; margin-top: 8px;">
+                        💡 Tokens are exchanged automatically during login. Check browser console and server logs for errors.
+                    </div>
+                `;
+            }
         }
     </script>
 </body>

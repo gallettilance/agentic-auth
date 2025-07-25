@@ -220,28 +220,41 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
         user_message = UserMessage(content=message, role="user")
         logger.info(f"📤 Created user message for {user_email}: {user_message}")
         
-        # Get MCP tokens from helper function using the provided user_email
-        mcp_tokens = get_mcp_tokens_for_user_direct(user_email)
-        logger.info(f"🔐 Found {len(mcp_tokens)} MCP tokens for user {user_email}")
+        # Get MCP token from Flask session if not provided
+        if not mcp_tokens:
+            try:
+                from flask import session
+                mcp_token = session.get('mcp_token')
+                if mcp_token:
+                    mcp_tokens = {
+                        'http://localhost:8001/sse': mcp_token  # MCP server endpoint
+                    }
+                    logger.info(f"🔐 Using MCP token from session for {user_email}")
+                else:
+                    logger.info(f"🔍 No MCP token in session for {user_email}")
+            except RuntimeError:
+                # Not in request context
+                logger.info("🔍 Not in request context, using provided tokens")
         
-        # Build MCP headers with appropriate tokens for each MCP server
-        mcp_headers = {}
-        for mcp_server_url, mcp_token in mcp_tokens.items():
-            if mcp_token and mcp_token != "NO_TOKEN_YET":
-                mcp_headers[mcp_server_url] = {
-                    "Authorization": f"Bearer {mcp_token}"
-                }
-                logger.info(f"🔐 Using MCP token for {mcp_server_url}: {mcp_token[:20]}...")
-        
-        # Prepare extra headers for agent
+        # Prepare extra headers for agent with MCP authentication
         extra_headers = {}
-        if mcp_headers:
-            extra_headers["X-LlamaStack-Provider-Data"] = json.dumps({
-                "mcp_headers": mcp_headers
-            })
-            logger.info(f"🔐 Configured MCP headers for {len(mcp_headers)} servers")
+        if mcp_tokens:
+            # Build MCP headers for Llama Stack
+            mcp_headers = {}
+            for mcp_endpoint, mcp_token in mcp_tokens.items():
+                if mcp_token and mcp_token != "NO_TOKEN_YET":
+                    mcp_headers[mcp_endpoint] = {
+                        "Authorization": f"Bearer {mcp_token}"
+                    }
+                    logger.info(f"🔐 Added MCP header for {mcp_endpoint}: Bearer {mcp_token[:20]}...")
+            
+            if mcp_headers:
+                extra_headers["X-LlamaStack-Provider-Data"] = json.dumps({
+                    "mcp_headers": mcp_headers
+                })
+                logger.info(f"🔐 Configured MCP headers for {len(mcp_headers)} servers")
         
-        # Send to agent with streaming enabled (like original)
+        # Send to agent with streaming enabled
         response = agent.create_turn(
             messages=[user_message],
             session_id=agent_session_id,
@@ -249,39 +262,37 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
             extra_headers=extra_headers
         )
         
-        # Extract response content using EventLogger (like original)
-        from llama_stack_client.lib.agents.event_logger import EventLogger
-        
+        # Process the streaming response with simple iteration
         response_content = ""
-        tool_calls = []
         
-        # Process the streaming response using EventLogger
-        for log in EventLogger().log(response):
-            # Extract content from the log events
-            if hasattr(log, 'event') and log.event:
-                event = log.event
+        try:
+            # Iterate through the streaming response 
+            for chunk in response:
+                # Try to extract content from various possible attributes
+                chunk_text = ""
                 
-                # Handle different event types
-                if hasattr(event, 'delta') and hasattr(event.delta, 'content'):
-                    # Streaming content delta
-                    if event.delta.content:
-                        response_content += event.delta.content
-                elif hasattr(event, 'content'):
-                    # Complete content
-                    if event.content:
-                        response_content += event.content
-                elif hasattr(event, 'tool_call'):
-                    # Tool call event
-                    tool_call = event.tool_call
-                    tool_calls.append({
-                        "tool_name": tool_call.tool_name,
-                        "arguments": str(tool_call.arguments)
-                    })
-                    logger.info(f"🔧 Found tool call: {tool_call.tool_name}")
-            
-            # Also check the log object itself for content
-            if hasattr(log, 'content') and log.content:
-                response_content += log.content
+                # Use getattr with defaults to safely access attributes
+                if hasattr(chunk, 'event'):
+                    event = getattr(chunk, 'event', None)
+                    if event:
+                        # Try different content attributes on the event
+                        chunk_text = (getattr(event, 'text', '') or 
+                                    getattr(event, 'content', '') or 
+                                    str(getattr(getattr(event, 'delta', None), 'text', '') or ''))
+                
+                # Try direct attributes on chunk
+                if not chunk_text:
+                    chunk_text = (getattr(chunk, 'text', '') or 
+                                getattr(chunk, 'content', '') or
+                                str(getattr(getattr(chunk, 'delta', None), 'text', '') or ''))
+                
+                if chunk_text:
+                    response_content += str(chunk_text)
+                        
+        except Exception as stream_error:
+            logger.warning(f"⚠️ Error processing streaming response: {stream_error}")
+            # Fallback: try to get content from the response object itself
+            response_content = str(getattr(response, 'content', getattr(response, 'text', 'Received response but could not extract content')))
         
         # Clean up the response content
         if response_content:
@@ -290,18 +301,28 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
             response_content = response_content.replace('\\t', '\t')
             response_content = response_content.replace('\\"', '"')
         
-        response_text = response_content if response_content else "No response content"
+        if not response_content:
+            response_content = "Response received but no content available"
         
-        logger.info(f"✅ Agent response for {user_email}: {response_text[:100]}...")
+        logger.info(f"✅ Agent response for {user_email}: {response_content[:100]}...")
         
         return {
             "success": True,
-            "response": response_text
+            "response": response_content
         }
         
     except Exception as e:
         error_message = str(e)
         logger.error(f"❌ Error sending message to agent for {user_email}: {error_message}")
+        
+        # Check for MCP authorization errors
+        if "Authorization required" in error_message or "insufficient scope" in error_message.lower():
+            return {
+                "success": False,
+                "response": f"🔐 MCP Authorization Error: {error_message}",
+                "error_type": "mcp_authorization_error",
+                "requires_scope_upgrade": True
+            }
         
         return {
             "success": False,

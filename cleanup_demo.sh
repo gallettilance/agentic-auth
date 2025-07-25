@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 🧹 Complete Demo Cleanup Script
+# 🧹 Token Exchange V2 Demo Cleanup Script
 # Removes all demo data for a fresh start
 
 set -e
@@ -12,10 +12,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🧹 Complete Demo Cleanup${NC}"
-echo "================================"
+echo -e "${BLUE}🧹 Token Exchange V2 Demo Cleanup${NC}"
+echo "====================================="
 echo ""
-echo -e "${YELLOW}⚠️  WARNING: This will delete ALL demo data:${NC}"
+echo -e "${YELLOW}⚠️  WARNING: This will delete ALL Token Exchange V2 demo data:${NC}"
+echo "   - Keycloak realm and configuration"
 echo "   - Database (users, permissions, approvals)"
 echo "   - JWT keys (will be regenerated on next start)"
 echo "   - Log files"
@@ -52,6 +53,39 @@ safe_remove() {
         echo -e "${YELLOW}⚠️  $description not found (already clean)${NC}"
     fi
 }
+
+# Clean up Keycloak
+echo ""
+echo -e "${YELLOW}🔐 Keycloak Token Exchange V2 cleanup:${NC}"
+if docker ps -a -q -f name=keycloak | grep -q .; then
+    echo -e "${YELLOW}🔄 Removing Keycloak container...${NC}"
+    docker rm -f keycloak >/dev/null 2>&1
+    echo -e "${GREEN}✅ Keycloak container removed${NC}"
+else
+    echo -e "${YELLOW}⚠️  Keycloak container not found (already clean)${NC}"
+fi
+
+# Clean up Keycloak data volumes
+echo -e "${YELLOW}🔄 Removing Keycloak data volume...${NC}"
+if docker volume ls -q | grep -q "keycloak_data"; then
+    docker volume rm keycloak_data >/dev/null 2>&1 || true
+    echo -e "${GREEN}✅ Removed Keycloak data volume${NC}"
+else
+    echo -e "${YELLOW}⚠️  Keycloak data volume not found (already clean)${NC}"
+fi
+
+# Clean up any other keycloak-related volumes
+docker volume ls -q -f name=keycloak | while read volume; do
+    if [ ! -z "$volume" ]; then
+        docker volume rm "$volume" >/dev/null 2>&1 || true
+        echo -e "${GREEN}✅ Removed volume: $volume${NC}"
+    fi
+done
+
+# Also remove any unnamed volumes that might be from Keycloak
+echo -e "${YELLOW}🔄 Cleaning up dangling volumes...${NC}"
+docker volume prune -f >/dev/null 2>&1 || true
+echo -e "${GREEN}✅ Cleaned up dangling volumes${NC}"
 
 # Clean up databases
 echo ""
@@ -172,9 +206,10 @@ verify_clean "logs/" "Log files"
 verify_clean "demo_pids.txt" "PID file"
 
 echo ""
-echo -e "${GREEN}🎉 Demo cleanup completed successfully!${NC}"
+echo -e "${GREEN}🎉 Token Exchange V2 demo cleanup completed successfully!${NC}"
 echo ""
 echo -e "${BLUE}📋 What was cleaned:${NC}"
+echo "   ✅ Keycloak realm and Token Exchange V2 configuration"
 echo "   ✅ All databases (users, permissions, sessions)"
 echo "   ✅ JWT keys (will be auto-generated on next start)"
 echo "   ✅ Log files and session data"
@@ -182,7 +217,7 @@ echo "   ✅ Python cache and bytecode"
 echo "   ✅ Browser cookies for localhost"
 echo "   ✅ Background processes"
 echo ""
-echo -e "${GREEN}🚀 Ready for a fresh demo start!${NC}"
+echo -e "${GREEN}🚀 Ready for a fresh Token Exchange V2 demo start!${NC}"
 echo "   Run: ${BLUE}./start_demo.sh${NC}"
 echo ""
 echo -e "${YELLOW}💡 Tip: Use ./stop_demo.sh for normal shutdown (preserves data)${NC}"
