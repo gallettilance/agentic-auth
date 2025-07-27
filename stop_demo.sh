@@ -2,15 +2,12 @@
 
 # 🛑 Stop Unified Authentication & Authorization Demo Services (Keycloak Edition)
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+source "$SCRIPT_DIR/scripts/demo_utils.sh"
+
 echo "🛑 Stopping Unified Authentication & Authorization Demo (Keycloak Edition)..."
 echo "=========================================================================="
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
 
 # Function to stop service by port
 stop_by_port() {
@@ -64,21 +61,23 @@ stop_by_port 8321 "Llama Stack"
 stop_by_port 8003 "Admin Dashboard"
 stop_by_port 8001 "MCP Server"
 
-# Stop Keycloak
-echo ""
-echo -e "${BLUE}🔐 Stopping Keycloak...${NC}"
-if docker ps -q -f name=keycloak | grep -q .; then
-    echo -e "${YELLOW}🔄 Stopping Keycloak container...${NC}"
-    docker stop keycloak >/dev/null 2>&1
-    echo -e "${GREEN}✅ Keycloak stopped${NC}"
-else
-    echo -e "${YELLOW}⚠️  Keycloak container not running${NC}"
+if [ "$KEYCLOAK_RUN_CONTAINER" = true ] ; then
+    # Stop Keycloak
+    echo ""
+    echo -e "${BLUE}🔐 Stopping Keycloak...${NC}"
+    if $CONTAINER_RUNTIME ps -q -f name=$KEYCLOAK_CONTAINER_NAME | grep -q .; then
+        echo -e "${YELLOW}🔄 Stopping Keycloak container...${NC}"
+        $CONTAINER_RUNTIME stop $KEYCLOAK_CONTAINER_NAME >/dev/null 2>&1
+        echo -e "${GREEN}✅ Keycloak stopped${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Keycloak container not running${NC}"
+    fi
 fi
 
 # Note about Keycloak
 echo ""
 echo -e "${BLUE}ℹ️  Note: Keycloak container is preserved for next start${NC}"
-echo -e "${BLUE}   Use: ./cleanup_demo.sh to remove it completely${NC}"
+echo -e "${BLUE}   Use: $SCRIPT_DIR/cleanup_demo.sh to remove it completely${NC}"
 
 # Clear Keycloak SSO session
 echo ""
@@ -86,7 +85,7 @@ echo "🔐 Clearing Keycloak SSO session..."
 
 clear_keycloak_sso() {
     # Check if Keycloak is running
-    if lsof -Pi :8002 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    if lsof -Pi :$KEYCLOAK_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
         echo -e "${YELLOW}🔄 Logging out from Keycloak SSO...${NC}"
         
         if command -v curl >/dev/null 2>&1; then
@@ -94,21 +93,21 @@ clear_keycloak_sso() {
             echo -e "${YELLOW}🔄 Clearing all user sessions via admin API...${NC}"
             
             # Get admin token
-            ADMIN_TOKEN=$(curl -s -X POST http://localhost:8002/realms/master/protocol/openid-connect/token \
+            ADMIN_TOKEN=$(curl -s -X POST ${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "username=admin&password=admin123&grant_type=password&client_id=admin-cli" | \
+                -d "username=$KEYCLOAK_ADMIN&password=$KEYCLOAK_ADMIN_PASSWORD&grant_type=password&client_id=admin-cli" | \
                 python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || true
             
             if [ -n "$ADMIN_TOKEN" ]; then
                 # Clear all user sessions in the realm
                 curl -s -X DELETE \
-                    "http://localhost:8002/admin/realms/authentication-demo/sessions" \
+                    "${KEYCLOAK_URL}/admin/realms/$KEYCLOAK_REALM/sessions" \
                     -H "Authorization: Bearer $ADMIN_TOKEN" \
                     -H "Content-Type: application/json" >/dev/null 2>&1 || true
                     
                 # Also clear all offline sessions
                 curl -s -X DELETE \
-                    "http://localhost:8002/admin/realms/authentication-demo/sessions/offline" \
+                    "${KEYCLOAK_URL}/admin/realms/$KEYCLOAK_REALM/sessions/offline" \
                     -H "Authorization: Bearer $ADMIN_TOKEN" \
                     -H "Content-Type: application/json" >/dev/null 2>&1 || true
                     
@@ -117,15 +116,15 @@ clear_keycloak_sso() {
                 echo -e "${YELLOW}⚠️  Could not get admin token - trying direct logout${NC}"
                 
                 # Method 2: Force logout by hitting logout endpoint with proper params
-                LOGOUT_URL="http://localhost:8002/realms/authentication-demo/protocol/openid-connect/logout"
+                LOGOUT_URL="${KEYCLOAK_URL}/realms/$KEYCLOAK_REALM/protocol/openid-connect/logout"
                 curl -s -X POST "$LOGOUT_URL" \
                     -H "Content-Type: application/x-www-form-urlencoded" \
-                    -d "client_id=authentication-demo&post_logout_redirect_uri=http://localhost:5001" \
+                    -d "client_id=$OIDC_CLIENT_ID&post_logout_redirect_uri=http://localhost:5001" \
                     >/dev/null 2>&1 || true
                     
                 # Also try the end session endpoint
-                END_SESSION_URL="http://localhost:8002/realms/authentication-demo/protocol/openid-connect/logout"
-                curl -s -X GET "$END_SESSION_URL?client_id=authentication-demo&post_logout_redirect_uri=http://localhost:5001" \
+                END_SESSION_URL="${KEYCLOAK_URL}/realms/$KEYCLOAK_REALM/protocol/openid-connect/logout"
+                curl -s -X GET "$END_SESSION_URL?client_id=$OIDC_CLIENT_ID&post_logout_redirect_uri=http://localhost:5001" \
                     >/dev/null 2>&1 || true
                     
                 echo -e "${GREEN}✅ Keycloak logout endpoints called${NC}"
@@ -134,7 +133,7 @@ clear_keycloak_sso() {
             echo -e "${YELLOW}⚠️  curl not available - Keycloak SSO session may persist${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠️  Keycloak not running on port 8002 - skipping SSO logout${NC}"
+        echo -e "${YELLOW}⚠️  Keycloak not running on port $KEYCLOAK_PORT - skipping SSO logout${NC}"
     fi
 }
 
@@ -227,10 +226,10 @@ echo "├── responses.db - Chat history (if exists)"
 echo "└── kvstore.db - Application state (if exists)"
 echo ""
 echo -e "${BLUE}🔄 Next steps:${NC}"
-echo "   🚀 Restart demo: ./start_demo.sh"
-echo "   🧹 Complete reset: ./cleanup_demo.sh"
-echo "   🛑 Stop Keycloak: ./stop_keycloak.sh"
+echo "   🚀 Restart demo: $SCRIPT_DIR/start_demo.sh"
+echo "   🧹 Complete reset: $SCRIPT_DIR/cleanup_demo.sh"
+echo "   🛑 Stop Keycloak: $SCRIPT_DIR/stop_keycloak.sh"
 echo ""
 echo -e "${YELLOW}💡 Tip: This preserves all chat history and application state${NC}"
 echo -e "${YELLOW}     Keycloak SSO session has been cleared for clean login${NC}"
-echo -e "${YELLOW}     For a fresh start, use ./cleanup_demo.sh${NC}" 
+echo -e "${YELLOW}     For a fresh start, use $SCRIPT_DIR/cleanup_demo.sh${NC}"

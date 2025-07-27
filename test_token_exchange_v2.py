@@ -9,13 +9,15 @@ import base64
 import json
 import time
 import sys
+import os
 from typing import Dict, List, Optional
 
 # Configuration
-KEYCLOAK_URL = "http://localhost:8002"
-REALM_NAME = "authentication-demo"
-CLIENT_ID = "authentication-demo"
-CLIENT_SECRET = "demo-client-secret-change-in-production"
+KEYCLOAK_URL = os.getenv("KEYCLOAK_ENV", "http://localhost:8002")
+KEYCLOAK_REALM_NAME = os.getenv("KEYCLOAK_REALM_NAME", "authentication-demo")
+KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "authentication-demo")
+KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", "demo-client-secret-change-in-production")
+
 
 # Test scenarios
 TEST_USERS = [
@@ -40,11 +42,11 @@ class TokenExchangeV2Tester:
         """Authenticate user and return token info"""
         try:
             response = requests.post(
-                f"{KEYCLOAK_URL}/realms/{REALM_NAME}/protocol/openid-connect/token",
+                f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}/protocol/openid-connect/token",
                 data={
                     'grant_type': 'password',
-                    'client_id': CLIENT_ID,
-                    'client_secret': CLIENT_SECRET,
+                    'client_id': KEYCLOAK_CLIENT_ID,
+                    'client_secret': KEYCLOAK_CLIENT_SECRET,
                     'username': username,
                     'password': password,
                     'scope': 'openid profile email'
@@ -77,32 +79,45 @@ class TokenExchangeV2Tester:
                 'subject_token': access_token,
                 'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                 'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
-                'audience': CLIENT_ID,  # Self-exchange
+                'audience': KEYCLOAK_CLIENT_ID,  # Self-exchange
                 'scope': ' '.join(requested_scopes)
             }
             
             # Use Basic Auth for confidential client
-            auth_string = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+            auth_string = base64.b64encode(f"{KEYCLOAK_CLIENT_ID}:{KEYCLOAK_CLIENT_SECRET}".encode()).decode()
             headers = {
                 'Authorization': f'Basic {auth_string}',
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             
             response = requests.post(
-                f"{KEYCLOAK_URL}/realms/{REALM_NAME}/protocol/openid-connect/token",
+                f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}/protocol/openid-connect/token",
                 data=data,
                 headers=headers
             )
             
             if response.status_code == 200:
                 result = response.json()
+
+                granted_scopes = result.get('scope', '').split()
+
+                # Validate that requested scopes are fully granted
+                if not set(requested_scopes).issubset(set(granted_scopes)):
+                    return {
+                        'success': False,
+                        'error': 'Scope mismatch',
+                        'error_description': f"Requested scopes {requested_scopes} not fully granted: {granted_scopes}",
+                        'status_code': response.status_code,
+                        'requested_scopes': requested_scopes
+                    }
+                
                 return {
                     'success': True,
                     'access_token': result['access_token'],
                     'token_type': result.get('token_type', 'Bearer'),
                     'expires_in': result.get('expires_in'),
                     'scope': result.get('scope', ''),
-                    'granted_scopes': result.get('scope', '').split(),
+                    'granted_scopes': granted_scopes,
                     'requested_scopes': requested_scopes
                 }
             else:
@@ -334,7 +349,7 @@ class TokenExchangeV2Tester:
         
         # Validate key properties
         checks = [
-            ('Audience contains client ID', CLIENT_ID in str(payload.get('aud', ''))),
+            ('Audience contains client ID', KEYCLOAK_CLIENT_ID in str(payload.get('aud', ''))),
             ('Scope contains requested scopes', 'mcp:list_files' in payload.get('scope', '')),
             ('Token type is Bearer', exchange_result['token_type'] == 'Bearer'),
             ('Token has expiration', payload.get('exp') is not None)
@@ -377,18 +392,18 @@ class TokenExchangeV2Tester:
                 'subject_token': auth_result['access_token'],
                 'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                 'requested_token_type': 'urn:ietf:params:oauth:token-type:refresh_token',
-                'audience': CLIENT_ID,
+                'audience': KEYCLOAK_CLIENT_ID,
                 'scope': 'mcp:list_files'
             }
-            
-            auth_string = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+
+            auth_string = base64.b64encode(f"{KEYCLOAK_CLIENT_ID}:{KEYCLOAK_CLIENT_SECRET}".encode()).decode()
             headers = {
                 'Authorization': f'Basic {auth_string}',
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             
             response = requests.post(
-                f"{KEYCLOAK_URL}/realms/{REALM_NAME}/protocol/openid-connect/token",
+                f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}/protocol/openid-connect/token",
                 data=data,
                 headers=headers
             )
@@ -414,8 +429,8 @@ class TokenExchangeV2Tester:
         """Run all Token Exchange V2 tests"""
         print("🧪 Token Exchange V2 - Test Suite")
         print("=" * 60)
-        print(f"Target: {KEYCLOAK_URL}/realms/{REALM_NAME}")
-        print(f"Client: {CLIENT_ID}")
+        print(f"Target: {KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}")
+        print(f"Client: {KEYCLOAK_CLIENT_ID}")
         print()
         
         test_functions = [
