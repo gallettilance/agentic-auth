@@ -14,6 +14,7 @@ export MCP_SERVER_URI=${MCP_SERVER_URI:-http://localhost:8001}
 export LLAMA_STACK_URL=${LLAMA_STACK_URL:-http://localhost:8321}
 export ADMIN_EMAIL=${ADMIN_EMAIL:-}
 export FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-"dev-secret-change-in-production"}
+export KUBERNETES_MCP_SERVER_DIR=${KUBERNETES_MCP_SERVER_DIR:-}
 
 export KEYCLOAK_IMAGE=${KEYCLOAK_IMAGE:-"quay.io/keycloak/keycloak:26.2"}
 
@@ -60,6 +61,12 @@ cleanup() {
     if [ ! -z "$MCP_PID" ]; then
         kill $MCP_PID 2>/dev/null || true
         echo "   ✅ MCP server stopped"
+    fi
+
+    if [ -n "$KMCP_DIR" ] && [ -z "$KUBERNETES_MCP_SERVER_DIR" ] && [ -d "$KMCP_DIR" ]; then
+        echo "   🧹 Cleaning up temporary kubernetes-mcp-server directory: $KMCP_DIR"
+        rm -rf "$KMCP_DIR"
+        echo "   ✅ Temporary directory cleaned up"
     fi
     
     if [ ! -z "$LLAMA_PID" ]; then
@@ -242,6 +249,8 @@ OIDC_ISSUER_URL=${OIDC_ISSUER_URL}
 OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
 OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
 
+KUBERNETES_MCP_SERVER_DIR=${KUBERNETES_MCP_SERVER_DIR}
+
 # Service URLs
 MCP_SERVER_URI=${MCP_SERVER_URI}
 LLAMA_STACK_URL=${LLAMA_STACK_URL}
@@ -353,14 +362,6 @@ echo -e "${GREEN}✅ Token Exchange V2 configuration validated${NC}"
 
 # Now start other services
 
-# Start MCP Server
-echo -e "\n${BLUE}🔧 Starting MCP Server...${NC}"
-
-FASTMCP_PORT=8001 python "$SCRIPT_DIR/mcp/mcp_server.py" > "$SCRIPT_DIR/logs/mcp_server.log" 2>&1 &
-MCP_PID=$!
-
-echo "   ✅ MCP Server started (PID: $MCP_PID)"
-
 # Start Admin Dashboard Frontend
 echo -e "\n${BLUE}🎛️  Starting Admin Dashboard...${NC}"
 python "$SCRIPT_DIR/frontends/admin-dashboard/app.py" > "$SCRIPT_DIR/logs/admin_dashboard.log" 2>&1 &
@@ -372,6 +373,33 @@ echo -e "\n${BLUE}🦙 Starting Llama Stack...${NC}"
 LLAMA_STACK_LOGGING=all=debug llama stack run "$SCRIPT_DIR/services/stack/run.yml" > "$SCRIPT_DIR/logs/llama_stack.log" 2>&1 &
 LLAMA_PID=$!
 echo "   ✅ Llama Stack started (PID: $LLAMA_PID)"
+
+# Start MCP Server
+echo ""
+echo "🔧 Starting Kubernetes MCP Server..."
+
+if [ -n "$KUBERNETES_MCP_SERVER_DIR" ] && [ -d "$KUBERNETES_MCP_SERVER_DIR" ]; then
+    echo "   📁 Using existing kubernetes-mcp-server directory: $KUBERNETES_MCP_SERVER_DIR"
+    KMCP_DIR="$KUBERNETES_MCP_SERVER_DIR"
+else
+    KMCP_DIR=$(mktemp -d)
+    echo "   📦 Cloning kubernetes-mcp-server to temporary directory: $KMCP_DIR"
+    git clone --branch=agentic-scopes https://github.com/ardaguclu/kubernetes-mcp-server.git "$KMCP_DIR"
+fi
+
+echo "   🔨 Building kubernetes-mcp-server..."
+pushd "$KMCP_DIR"
+go build -o kubernetes-mcp-server ./cmd/kubernetes-mcp-server
+echo "   ✅ Build completed"
+popd
+
+echo "   🚀 Starting kubernetes-mcp-server with mcp_config.toml..."
+"$KMCP_DIR/kubernetes-mcp-server" --config "$(pwd)/mcp_config.toml" > logs/mcp_server.log 2>&1 &
+MCP_PID=$!
+echo "   ✅ MCP Server started (PID: $MCP_PID)"
+echo "   📝 Logs: logs/mcp_server.log"
+
+sleep 2
 
 # Start Frontend
 echo -e "\n${BLUE}🌐 Starting Frontend...${NC}"

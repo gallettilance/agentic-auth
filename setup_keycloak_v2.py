@@ -21,11 +21,10 @@ KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", "demo-client-secret
 # Scopes configuration with role requirements
 SCOPE_DEFINITIONS = {
     # MCP Scopes
-    "mcp:list_files": {"description": "List files via MCP", "risk_level": "low", "min_role": "user"},
-    "mcp:health_check": {"description": "Health check via MCP", "risk_level": "low", "min_role": "user"},
-    "mcp:get_server_info": {"description": "Get server info via MCP", "risk_level": "low", "min_role": "user"},
-    "mcp:list_tool_scopes": {"description": "List tool scopes via MCP", "risk_level": "low", "min_role": "user"},
-    "mcp:execute_command": {"description": "Execute commands via MCP (admin only)", "risk_level": "critical", "min_role": "admin"},
+    "mcp:resources_list": {"description": "List resources via MCP", "risk_level": "low", "min_role": "user"},
+    "mcp:resources_get": {"description": "Get Resources via MCP", "risk_level": "low", "min_role": "user"},
+    "mcp:resources_create_or_update": {"description": "Create or update resources via MCP", "risk_level": "low", "min_role": "user"},
+    "mcp:resources_delete": {"description": "Delete resources via MCP (admin only)", "risk_level": "critical", "min_role": "admin"},
     
     # Llama Stack Scopes (Official scopes only)
     "llama:inference": {"description": "Inference via Llama Stack", "risk_level": "medium", "min_role": "user"},
@@ -48,7 +47,7 @@ ROLE_DEFINITIONS = {
     "user": {
         "description": "Standard user with basic operational permissions",
         "scopes": [
-            "mcp:list_files", "mcp:health_check", "mcp:get_server_info", "mcp:list_tool_scopes",
+            "mcp:resources_get", "mcp:resources_list", "mcp:resources_create_or_update",
             "llama:inference", "llama:models:read", "llama:models:write", "llama:agents:read", 
             "llama:agents:write", "llama:tools", "llama:toolgroups:read", "llama:toolgroups:write",
             "llama:vector_dbs:read", "llama:vector_dbs:write", "llama:safety", "llama:eval"
@@ -1143,7 +1142,7 @@ class KeycloakV2Setup:
                         'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                         'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                         'audience': KEYCLOAK_CLIENT_ID,
-                        'scope': 'mcp:list_files mcp:health_check'
+                        'scope': 'mcp:resources_list mcp:resources_get'
                     },
                     headers={
                         'Authorization': f'Basic {base64.b64encode(f"{KEYCLOAK_CLIENT_ID}:{KEYCLOAK_CLIENT_SECRET}".encode()).decode()}',
