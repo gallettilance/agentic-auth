@@ -95,11 +95,13 @@ async def exchange_for_llama_stack_token(access_token: str) -> dict:
         if not token_endpoint:
             return {'success': False, 'error': 'Token endpoint not found'}
         
-        # Token Exchange V2 - Self-exchange for Llama scopes
-        llama_scopes = [
-            'llama:agent_create',
-            'llama:agent_session_create', 
-            'llama:inference_chat_completion'
+        # Token Exchange V2 - Self-exchange for basic OIDC scopes only
+        # 🔒 ZERO-TRUST: Start with NO Llama scopes, only basic OIDC scopes
+        basic_scopes = [
+            'email',      # Basic: User email
+            'profile'     # Basic: User profile
+            # Note: Llama scopes like 'llama:agent_create', 'llama:inference_chat_completion' 
+            # will be exchanged when specific Llama Stack features are used
         ]
         
         # Token exchange request data (RFC 8693)
@@ -109,7 +111,7 @@ async def exchange_for_llama_stack_token(access_token: str) -> dict:
             'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
             'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
             'audience': OIDC_CLIENT_ID,  # Self-exchange using same client ID
-            'scope': ' '.join(llama_scopes)
+            'scope': ' '.join(basic_scopes)
         }
         
         # Use Basic Auth for confidential client (consistent approach)
@@ -119,18 +121,18 @@ async def exchange_for_llama_stack_token(access_token: str) -> dict:
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        logger.info(f"🔄 Token Exchange V2 - Llama scopes: {llama_scopes}")
+        logger.info(f"🔄 Token Exchange V2 - Basic OIDC scopes only: {basic_scopes}")
         logger.info(f"🎯 Using audience: {OIDC_CLIENT_ID} (self-exchange)")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(token_endpoint, data=data, headers=headers) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"✅ Llama Stack token exchange successful")
+                    logger.info(f"✅ Llama Stack token exchange successful (basic scopes only)")
                     return {
                         'success': True,
                         'token': result['access_token'],
-                        'scopes': llama_scopes
+                        'scopes': basic_scopes
                     }
                 else:
                     error_data = await response.json()
@@ -156,12 +158,13 @@ async def exchange_for_mcp_token(access_token: str) -> dict:
         if not token_endpoint:
             return {'success': False, 'error': 'Token endpoint not found'}
         
-        # Token Exchange V2 - Self-exchange for MCP scopes
-        mcp_scopes = [
-            'mcp:list_files', 
-            'mcp:get_server_info', 
-            'mcp:health_check', 
-            'mcp:list_tool_scopes'
+        # Token Exchange V2 - Self-exchange for basic OIDC scopes only
+        # 🔒 ZERO-TRUST: Start with NO MCP scopes, only basic OIDC scopes
+        basic_scopes = [
+            'email',      # Basic: User email
+            'profile'     # Basic: User profile
+            # Note: MCP scopes like 'mcp:health_check', 'mcp:get_server_info' 
+            # will be exchanged when specific MCP tools are used
         ]
         
         # Token exchange request data (RFC 8693)
@@ -171,7 +174,7 @@ async def exchange_for_mcp_token(access_token: str) -> dict:
             'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
             'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
             'audience': OIDC_CLIENT_ID,  # Self-exchange using same client ID  
-            'scope': ' '.join(mcp_scopes)
+            'scope': ' '.join(basic_scopes)
         }
         
         # Use Basic Auth for confidential client (consistent approach)
@@ -181,18 +184,18 @@ async def exchange_for_mcp_token(access_token: str) -> dict:
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        logger.info(f"🔄 Token Exchange V2 - MCP scopes: {mcp_scopes}")
+        logger.info(f"🔄 Token Exchange V2 - Basic OIDC scopes only: {basic_scopes}")
         logger.info(f"🎯 Using audience: {OIDC_CLIENT_ID} (self-exchange)")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(token_endpoint, data=data, headers=headers) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"✅ MCP token exchange successful")
+                    logger.info(f"✅ MCP token exchange successful (basic scopes only)")
                     return {
                         'success': True,
                         'token': result['access_token'],
-                        'scopes': mcp_scopes
+                        'scopes': basic_scopes
                     }
                 else:
                     error_data = await response.json()
@@ -334,27 +337,16 @@ def callback():
         logger.info(f"🔧 OIDC Config: client_id={OIDC_CLIENT_ID}, issuer={OIDC_ISSUER_URL}")
         logger.info(f"🔧 Client secret configured: {bool(OIDC_CLIENT_SECRET)}")
         
-        # IMMEDIATELY exchange for specialized tokens
-        llama_stack_result = asyncio.run(exchange_for_llama_stack_token(access_token))
-        mcp_result = asyncio.run(exchange_for_mcp_token(access_token))
+        # 🔒 ZERO-TRUST: Do NOT exchange for specialized tokens immediately
+        # Tokens will be exchanged on-demand when services are actually used
+        logger.info(f"🔒 Zero-trust login: User has only basic OIDC scopes initially")
+        logger.info(f"🔒 Service tokens will be exchanged on-demand when needed")
         
-        if llama_stack_result['success']:
-            session['llama_stack_token'] = llama_stack_result['token']
-            logger.info(f"🦙 Llama Stack token obtained: {llama_stack_result['token'][:50]}...{llama_stack_result['token'][-20:]}")
-        else:
-            logger.error(f"❌ Llama Stack token exchange failed: {llama_stack_result.get('error')}")
-            
-        if mcp_result['success']:
-            session['mcp_token'] = mcp_result['token']
-            logger.info(f"🔧 MCP token obtained: {mcp_result['token'][:50]}...{mcp_result['token'][-20:]}")
-        else:
-            logger.error(f"❌ MCP token exchange failed: {mcp_result.get('error')}")
-        
-        # Store token in cache
+        # Store minimal token cache (no service tokens yet)
         token_cache[session['user_email']] = {
             'access_token': access_token,
-            'llama_stack_token': session.get('llama_stack_token'),
-            'mcp_token': session.get('mcp_token'),
+            'llama_stack_token': None,  # Will be exchanged when chat is used
+            'mcp_token': None,  # Will be exchanged when MCP tools are used
             'user_info': user_info,
             'token_data': result['token_data']
         }

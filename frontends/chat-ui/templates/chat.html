@@ -643,6 +643,16 @@
             color: #155724;
         }
         
+        .token-minimal {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .token-not-exchanged {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+        
         .token-missing {
             background: #f8d7da;
             color: #721c24;
@@ -1811,7 +1821,7 @@
                         updateMCPTokensDisplay(data.mcp_tokens);
                     }
                     
-                                    // Tokens are exchanged automatically during login callback
+                                    // 🔒 Zero-trust: Tokens are exchanged on-demand when first needed
                     
                 } else {
                     console.error('❌ Token info request failed:', response.status, response.statusText);
@@ -1832,10 +1842,25 @@
                     ? tokenInfo.token.substring(0, 50) + '...' 
                     : tokenInfo.token;
                 
+                // Determine status display based on token status
+                let statusDisplay = '✅ Available';
+                let statusClass = 'token-available';
+                
+                if (tokenInfo.status === 'minimal_scope') {
+                    statusDisplay = '🔒 Minimal Scope';
+                    statusClass = 'token-minimal';
+                } else if (tokenInfo.status === 'not_exchanged') {
+                    statusDisplay = '⏳ Not Exchanged';
+                    statusClass = 'token-not-exchanged';
+                } else if (tokenInfo.status === 'invalid') {
+                    statusDisplay = '❌ Invalid';
+                    statusClass = 'token-error';
+                }
+                
                 container.innerHTML = `
                     <div class="token-info">
                         <span class="token-type">🎫 Llama Stack Token</span>
-                        <span class="token-status token-available">✅ Available</span>
+                        <span class="token-status ${statusClass}">${statusDisplay}</span>
                     </div>
                     <div class="token-preview">${escapeHtml(preview)}</div>
                     <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'llama-stack')}</code></div>
@@ -1845,6 +1870,9 @@
                         <a href="${buildJwtIoUrl(tokenInfo.token)}" target="_blank" class="jwt-link">
                             🔍 Debug on JWT.io
                         </a>
+                    </div>
+                    <div style="color: #6c757d; font-size: 0.8em; margin-top: 4px;">
+                        🦙 LlamaStackClient handles its own token exchange internally
                     </div>
                 `;
             } else {
@@ -1861,7 +1889,8 @@
                     </div>
                     <div>Expected Audience: <code>llama-stack</code></div>
                     <div style="color: #6c757d; font-size: 0.9em; margin-top: 8px;">
-                        💡 Tokens are exchanged automatically during login. Check browser console and server logs for errors.
+                        💡 🔒 Zero-trust: Tokens are exchanged on-demand when first needed, not during login.<br>
+                        🦙 LlamaStackClient handles its own token exchange internally.
                     </div>
                 `;
             }
@@ -2099,10 +2128,25 @@
                     ? tokenInfo.token.substring(0, 50) + '...' 
                     : tokenInfo.token;
                 
+                // Determine status display based on token status
+                let statusDisplay = '✅ Available';
+                let statusClass = 'token-available';
+                
+                if (tokenInfo.status === 'minimal_scope') {
+                    statusDisplay = '🔒 Minimal Scope';
+                    statusClass = 'token-minimal';
+                } else if (tokenInfo.status === 'not_exchanged') {
+                    statusDisplay = '⏳ Not Exchanged';
+                    statusClass = 'token-not-exchanged';
+                } else if (tokenInfo.status === 'invalid') {
+                    statusDisplay = '❌ Invalid';
+                    statusClass = 'token-error';
+                }
+                
                 container.innerHTML = `
                     <div class="token-info">
                         <span class="token-type">🔧 MCP Token</span>
-                        <span class="token-status token-available">✅ Available</span>
+                        <span class="token-status ${statusClass}">${statusDisplay}</span>
                     </div>
                     <div class="token-preview">${escapeHtml(preview)}</div>
                     <div>Audience: <code>${escapeHtml(tokenInfo.audience || 'mcp-server')}</code></div>
@@ -2128,7 +2172,7 @@
                     </div>
                     <div>Expected Audience: <code>mcp-server</code></div>
                     <div style="color: #6c757d; font-size: 0.9em; margin-top: 8px;">
-                        💡 Tokens are exchanged automatically during login. Check browser console and server logs for errors.
+                        💡 🔒 Zero-trust: Tokens are exchanged on-demand when first needed, not during login.
                     </div>
                 `;
             }

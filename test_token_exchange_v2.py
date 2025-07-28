@@ -28,8 +28,8 @@ TEST_USERS = [
 TEST_SCOPES = {
     "mcp_basic": ["mcp:list_files", "mcp:health_check"],
     "mcp_admin": ["mcp:execute_command"],
-    "llama_basic": ["llama:agent_create", "llama:inference_chat_completion"],
-    "mixed": ["mcp:list_files", "llama:agent_create"]
+    "llama_basic": ["llama:models:read", "llama:agents:read"],
+    "mixed": ["mcp:list_files", "llama:inference"]
 }
 
 class TokenExchangeV2Tester:

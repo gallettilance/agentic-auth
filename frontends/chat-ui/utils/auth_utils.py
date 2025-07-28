@@ -68,6 +68,7 @@ def is_authorization_error(error_message: str) -> bool:
         "authorization required",
         "insufficientscopeerror", 
         "insufficient scope",
+        "insufficient oauth2 scopes",  # Llama Stack specific
         "access denied",
         "unauthorized",
         "permission denied",
@@ -102,6 +103,23 @@ def extract_authorization_error_details(error_message: str) -> dict:
         if tool_match:
             tool_name = tool_match.group(1)
         
+        # Try to extract required scope from the error message
+        # Format: "requires scope 'mcp:list_files'" or similar
+        scope_match = re.search(r"requires scope ['\"]?([^'\"]+)['\"]?", error_message)
+        if scope_match:
+            required_scope = scope_match.group(1)
+            logger.info(f"🔍 Parsed exact required scope from AuthorizationError: '{required_scope}'")
+        else:
+            # Fallback: use tool name with mcp: prefix if it's an MCP tool
+            # Check if this is an MCP server error by looking for MCP server URL
+            if "localhost:8001" in error_message or "mcp" in error_message.lower():
+                required_scope = f"mcp:{tool_name}"
+                logger.info(f"🔍 Using MCP fallback scope: '{required_scope}' (tool: {tool_name})")
+            else:
+                required_scope = tool_name
+                logger.info(f"🔍 Using generic fallback scope: '{required_scope}' (tool: {tool_name})")
+            logger.info(f"🔍 Using fallback scope for AuthorizationError: '{required_scope}' (tool: {tool_name})")
+        
         mcp_server_match = re.search(r"server ['\"]?([^'\"]+)['\"]?", error_message)
         if mcp_server_match:
             mcp_server_url = mcp_server_match.group(1)
@@ -109,7 +127,7 @@ def extract_authorization_error_details(error_message: str) -> dict:
         return {
             "error_type": error_type,
             "tool_name": tool_name,
-            "required_scope": tool_name,  # Tool name == scope name
+            "required_scope": required_scope,
             "mcp_server_url": mcp_server_url,
             "auth_server_url": None,  # Will be discovered by chat app
             "original_error": error_message,
@@ -124,21 +142,25 @@ def extract_authorization_error_details(error_message: str) -> dict:
         
         # Try to extract tool name from the error message
         # Format: InsufficientScopeError: Tool 'execute_command' requires scope 'execute_command' on server 'http://localhost:8001/sse' but current scopes are ['list_files']
-        tool_match = re.search(r"Tool ['\"]?(\w+)['\"]?", error_message)
+        tool_match = re.search(r"Tool ['\"]?([^'\"]+)['\"]?", error_message)
         if tool_match:
             tool_name = tool_match.group(1)
-            required_scope = tool_name  # Tool name == scope name
+            # Default required_scope to tool name initially
+            required_scope = tool_name
         
-        # Try to extract required scope (should match tool name)
+        # Try to extract required scope (should be more specific than tool name)
         scope_match = re.search(r"requires scope ['\"]?([^'\"]+)['\"]?", error_message)
         if scope_match:
+            # Use the exact scope as specified by the MCP server - don't modify it
             required_scope = scope_match.group(1)
+            logger.info(f"🔍 Parsed exact required scope from MCP error: '{required_scope}'")
         
         # Try to extract MCP server URL from the error message
-        # Format: "on server 'http://localhost:8001/sse'"
+        # Format: "on server 'http://localhost:8001/sse'" or "on server 'http://localhost:8001'"
         mcp_server_match = re.search(r"on server ['\"]?([^'\"]+)['\"]?", error_message)
         if mcp_server_match:
             mcp_server_url = mcp_server_match.group(1)
+            logger.info(f"🔍 Parsed MCP server URL from error: '{mcp_server_url}'")
         
         return {
             "error_type": error_type,
@@ -151,6 +173,51 @@ def extract_authorization_error_details(error_message: str) -> dict:
             "approval_status": "pending_admin_approval"
         }
     
+    # Check if this is a Llama Stack OAuth2 scope error
+    # Format: "Insufficient OAuth2 scopes for models API. Required: llama:models:write, llama:admin"
+    if "insufficient oauth2 scopes" in error_message.lower():
+        error_type = "llama_insufficient_scope"
+        approval_requested = True
+        
+        # Extract required scopes from error message
+        # Format: "Required: llama:models:write, llama:admin"
+        scope_match = re.search(r"Required: (.+)$", error_message, re.IGNORECASE)
+        if scope_match:
+            required_scopes_str = scope_match.group(1)
+            # Split by comma and clean up
+            required_scopes = [scope.strip() for scope in required_scopes_str.split(',')]
+            logger.info(f"🔍 Parsed Llama Stack required scopes: {required_scopes}")
+            
+            # For now, use the first scope as the primary required scope
+            # In the future, we might want to handle multiple scopes
+            required_scope = required_scopes[0] if required_scopes else "llama:agent_create"
+        else:
+            # Fallback to basic agent scope
+            required_scope = "llama:agent_create"
+            logger.info(f"🔍 Using fallback Llama Stack scope: '{required_scope}'")
+        
+        # Extract API endpoint from error message
+        # Format: "for models API" or "for agents API"
+        api_match = re.search(r"for (\w+) API", error_message, re.IGNORECASE)
+        if api_match:
+            api_name = api_match.group(1)
+            tool_name = f"llama:{api_name.lower()}"
+        else:
+            tool_name = "llama_stack_api"
+        
+        return {
+            "error_type": error_type,
+            "tool_name": tool_name,
+            "required_scope": required_scope,
+            "mcp_server_url": None,  # Not applicable for Llama Stack
+            "auth_server_url": None,
+            "original_error": error_message,
+            "approval_requested": approval_requested,
+            "approval_status": "pending_token_exchange",
+            "llama_scopes": required_scopes if 'required_scopes' in locals() else [required_scope]
+        }
+    
+    # Fallback for unrecognized error formats
     return {
         "error_type": error_type,
         "tool_name": tool_name,

@@ -363,7 +363,7 @@ echo "   ✅ Admin Dashboard started (PID: $ADMIN_PID)"
 
 # Start Llama Stack
 echo -e "\n${BLUE}🦙 Starting Llama Stack...${NC}"
-llama stack run "$SCRIPT_DIR/services/stack/run.yml" > "$SCRIPT_DIR/logs/llama_stack.log" 2>&1 &
+LLAMA_STACK_LOGGING=all=debug llama stack run "$SCRIPT_DIR/services/stack/run.yml" > "$SCRIPT_DIR/logs/llama_stack.log" 2>&1 &
 LLAMA_PID=$!
 echo "   ✅ Llama Stack started (PID: $LLAMA_PID)"
 

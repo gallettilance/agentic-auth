@@ -6,18 +6,24 @@ Handles agent creation, session management, and communication.
 from llama_stack_client import LlamaStackClient
 from llama_stack_client.types import UserMessage
 from llama_stack_client.lib.agents.agent import Agent
+from llama_stack_client.types.auth_types import OAuth2Config
 from httpx import Client
 from flask import session
 import logging
 import time
 import json
 import os
+import asyncio
 from utils.mcp_tokens_utils import get_mcp_tokens_for_user_direct
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 # Configuration
 LLAMA_STACK_URL = os.getenv("LLAMA_STACK_URL", "http://localhost:8321")
+OIDC_ISSUER_URL = os.getenv("OIDC_ISSUER_URL", "http://localhost:8002/realms/authentication-demo")
+OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
+OIDC_CLIENT_SECRET = os.getenv("OIDC_CLIENT_SECRET")
 
 # Agent configuration
 AGENT_SYSTEM_PROMPT = """You are an AI assistant with access to MCP (Model Context Protocol) tools.
@@ -53,12 +59,30 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         if not llama_client or (bearer_token and bearer_token != "NO_TOKEN_YET"):
             # Use the bearer token for Llama Stack authentication
             api_key = bearer_token if bearer_token and bearer_token != "NO_TOKEN_YET" else None
+            
+            # Configure OAuth2 settings for token exchange
+            oauth2_config = None
+            if OIDC_CLIENT_SECRET:
+                oauth2_config = OAuth2Config(
+                    token_endpoint=f"{OIDC_ISSUER_URL}/protocol/openid-connect/token",
+                    client_id=OIDC_CLIENT_ID,
+                    client_secret=OIDC_CLIENT_SECRET,
+                    realm="authentication-demo"
+                )
+                logger.info(f"🔧 OAuth2 configuration available for token exchange")
+            
             llama_client = LlamaStackClient(
                 base_url=LLAMA_STACK_URL,
                 api_key=api_key,
                 http_client=Client(verify=False),
+                oauth2_config=oauth2_config,
             )
+            
+            # Note: LlamaStackClient handles its own token exchange
+            # The session will be updated when the client performs token exchange
             logger.info(f"✅ Initialized Llama Stack client with authentication: {'Yes' if api_key else 'No'}")
+            if OIDC_CLIENT_SECRET:
+                logger.info(f"🔧 OAuth2 configuration available for future token exchange")
         
         # Check if user already has an agent in memory
         if user_email in user_agents:
@@ -72,6 +96,8 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
             return agent
         
         # Get available models
+        # TODO: When cache refresh is available, use @with_cache_refresh decorator
+        # to handle JWKS key ID issues automatically
         models = llama_client.models.list()
         if not models:
             logger.error("❌ No models available")
@@ -92,6 +118,7 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         # Store user agent for reuse
         user_agents[user_email] = {
             'agent': agent,
+            'client': llama_client,  # Store the client reference for token queries
             'created_at': time.time()
         }
         
@@ -200,7 +227,7 @@ def clear_user_session(user_email: str):
     except Exception as e:
         logger.error(f"❌ Error clearing session for {user_email}: {e}")
 
-def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str, mcp_tokens: dict = {}) -> dict:
+def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str, mcp_token: Optional[str] = None) -> dict:
     """Send message to the user's specific Llama Stack agent"""
     
     try:
@@ -221,14 +248,11 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
         logger.info(f"📤 Created user message for {user_email}: {user_message}")
         
         # Get MCP token from Flask session if not provided
-        if not mcp_tokens:
+        if not mcp_token:
             try:
                 from flask import session
                 mcp_token = session.get('mcp_token')
                 if mcp_token:
-                    mcp_tokens = {
-                        'http://localhost:8001/sse': mcp_token  # MCP server endpoint
-                    }
                     logger.info(f"🔐 Using MCP token from session for {user_email}")
                 else:
                     logger.info(f"🔍 No MCP token in session for {user_email}")
@@ -238,15 +262,14 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
         
         # Prepare extra headers for agent with MCP authentication
         extra_headers = {}
-        if mcp_tokens:
+        if mcp_token:
             # Build MCP headers for Llama Stack
             mcp_headers = {}
-            for mcp_endpoint, mcp_token in mcp_tokens.items():
-                if mcp_token and mcp_token != "NO_TOKEN_YET":
-                    mcp_headers[mcp_endpoint] = {
-                        "Authorization": f"Bearer {mcp_token}"
-                    }
-                    logger.info(f"🔐 Added MCP header for {mcp_endpoint}: Bearer {mcp_token[:20]}...")
+            if mcp_token and mcp_token != "NO_TOKEN_YET":
+                mcp_headers["http://localhost:8001/sse"] = {
+                    "Authorization": f"Bearer {mcp_token}"
+                }
+                logger.info(f"🔐 Added MCP header for http://localhost:8001/sse: Bearer {mcp_token[:20]}...")
             
             if mcp_headers:
                 extra_headers["X-LlamaStack-Provider-Data"] = json.dumps({
@@ -322,6 +345,29 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
                 "response": f"🔐 MCP Authorization Error: {error_message}",
                 "error_type": "mcp_authorization_error",
                 "requires_scope_upgrade": True
+            }
+        
+        # Check for Llama Stack authorization errors
+        if "llama" in error_message.lower() and ("authorization" in error_message.lower() or "scope" in error_message.lower()):
+            # Use the auth utils to parse the error details
+            from utils.auth_utils import extract_authorization_error_details
+            error_details = extract_authorization_error_details(error_message)
+            
+            tool_name = error_details.get('tool_name', 'llama_stack_api')
+            required_scope = error_details.get('required_scope', 'llama:agent_create')
+            llama_scopes = error_details.get('llama_scopes', [required_scope])
+            
+            logger.info(f"🔍 Llama Stack scope error details: tool_name={tool_name}, required_scope={required_scope}, llama_scopes={llama_scopes}")
+            
+            return {
+                "success": False,
+                "response": f"🔐 Llama Stack Authorization Error: {error_message}",
+                "error_type": "llama_authorization_error",
+                "requires_scope_upgrade": True,
+                "error_details": error_details,
+                "tool_name": tool_name,
+                "required_scope": required_scope,
+                "llama_scopes": llama_scopes
             }
         
         return {

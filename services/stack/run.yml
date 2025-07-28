@@ -59,11 +59,9 @@ models:
 server:
   port: 8321
   auth:
-    provider_type: "oauth2_token"
-    config:
+    provider_config:
+      type: "oauth2_token"
       jwks:
         uri: "http://localhost:8002/realms/authentication-demo/protocol/openid-connect/certs"
       issuer: "http://localhost:8002/realms/authentication-demo"
       audience: "authentication-demo"
-      claims_mapping:
-        principal: "preferred_username"

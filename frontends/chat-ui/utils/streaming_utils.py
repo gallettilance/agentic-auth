@@ -98,40 +98,11 @@ def create_auth_error_response(error_details: dict, message: str, user_email: st
     
     if not mcp_server_url:
         logger.error("❌ No MCP server URL found in error details - cannot create auth error response")
-        raise ValueError("MCP server URL is required for authorization error response")
+        return f"❌ Authorization error: Cannot determine MCP server URL\n"
     
-    # Generate a unique message ID
-    message_id = secrets.token_urlsafe(16)
-    
-    # Determine error type and create appropriate response
-    if error_details.get('error_type') == 'insufficient_scope':
-        # User needs scope upgrade (admin approval required)
-        auth_error_json = json.dumps({
-            'error_type': 'scope_upgrade_required',
-            'tool_name': tool_name,
-            'required_scope': required_scope,
-            'mcp_server_url': mcp_server_url,
-            'message_id': message_id,
-            'original_message': message,
-            'approval_status': 'pending_admin_approval',
-            'approval_requested': True
-        })
-    else:
-        # User needs initial MCP token
-        auth_error_json = json.dumps({
-            'error_type': 'mcp_token_required',
-            'tool_name': tool_name,
-            'required_scope': required_scope,
-            'mcp_server_url': mcp_server_url,
-            'message_id': message_id,
-            'original_message': message,
-            'approval_status': 'pending_admin_approval',
-            'approval_requested': True
-        })
-    
-    return f"__AUTH_ERROR_START__{auth_error_json}__AUTH_ERROR_END__"
+    return f"🔐 Authorization required for `{tool_name}` (scope: {required_scope})\n"
 
-def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0, mcp_token: Optional[str] = None):
+def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0, mcp_token: Optional[str] = None, access_token: Optional[str] = None):
     """Stream agent response with clean authorization error detection and automatic token exchange"""
     # Import here to avoid circular imports
     from utils.llama_agents_utils import get_or_create_session_for_user
@@ -182,6 +153,14 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                 required_scope = error_details.get('required_scope', tool_name)
                 mcp_server_url = error_details.get('mcp_server_url')
                 
+                # Enhanced debugging for scope parsing
+                logger.info(f"🔍 SCOPE PARSING DEBUG:")
+                logger.info(f"   📄 Raw error content: {full_content}")
+                logger.info(f"   🔧 Parsed tool_name: '{tool_name}'")
+                logger.info(f"   🎯 Parsed required_scope: '{required_scope}'")
+                logger.info(f"   🌐 Parsed mcp_server_url: '{mcp_server_url}'")
+                logger.info(f"   📋 Full error_details: {error_details}")
+                
                 # Safety check: if mcp_server_url is None, fail fast
                 if not mcp_server_url:
                     logger.error("❌ No MCP server URL found in error details - cannot process authorization error")
@@ -200,12 +179,9 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                     return
                 
                 # For Keycloak: Use token exchange API to get additional scope
-                logger.info(f"🔄 Attempting Keycloak token exchange for scope: {required_scope}")
+                logger.info(f"🔄 Attempting Keycloak token exchange for exact scope: {required_scope}")
+                # Note: Using exact scope as provided by MCP server (no modifications)
                     
-                # Ensure scope has proper prefix
-                if not required_scope.startswith('mcp:'):
-                    required_scope = f'mcp:{required_scope}'
-                
                 try:
                     # Import the token exchange function from our API
                     import sys
@@ -216,47 +192,55 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                     from api.tokens import exchange_token_for_audience
                     import asyncio
                     
-                    access_token = session.get('access_token')
+                    # Use provided access_token instead of session access
                     if not access_token:
                         logger.error("❌ No access token available for token exchange")
                         yield f"❌ Authentication error - please re-login\n"
                         return
                     
-                    # Get current MCP token scopes
-                    current_mcp_token = session.get('mcp_token')
+                    # Get current MCP token scopes from provided token
                     current_scopes = []
-                    if current_mcp_token:
+                    if mcp_token:
                         try:
                             import jwt
-                            decoded = jwt.decode(current_mcp_token, options={"verify_signature": False})
+                            decoded = jwt.decode(mcp_token, options={"verify_signature": False})
                             current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
                         except Exception:
                             pass
                     
-                    # Add the required scope to current scopes
-                    if required_scope not in current_scopes:
-                        current_scopes.append(required_scope)
+                    # Start with basic OIDC scopes and add the required scope
+                    # Don't include existing MCP scopes to avoid conflicts
+                    basic_scopes = ['email', 'profile']
+                    if required_scope not in basic_scopes:
+                        basic_scopes.append(required_scope)
+                    
+                    logger.info(f"🔍 Current token scopes: {current_scopes}")
+                    logger.info(f"🔍 Requesting scopes: {basic_scopes}")
                     
                     # Exchange token for new scopes using Keycloak
                     OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
                     result = asyncio.run(exchange_token_for_audience(
                         access_token=access_token,
                         audience=OIDC_CLIENT_ID,  # Self-exchange
-                        scopes=current_scopes
+                        scopes=basic_scopes
                     ))
                     
                     if result.get('success'):
-                        # Store the new MCP token
+                        # Get the new MCP token
                         new_mcp_token = result['access_token']
-                        session['mcp_token'] = new_mcp_token
+                        
                         logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
+                        
+                        # Note: We can't store in session here due to context issues
+                        # The new token will be passed to the retry call and can be stored by the caller
+                        logger.info(f"✅ New MCP token obtained (will be stored by caller): {new_mcp_token[:20]}...")
                         
                         # Retry the original request with new token
                         yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
                     
-                        # Recursive retry with incremented count
+                        # Recursive retry with incremented count and new tokens
                         for retry_chunk in stream_agent_response_with_auth_detection(
-                            message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token
+                            message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
                         ):
                             yield retry_chunk
                         return
@@ -291,93 +275,188 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
             required_scope = error_details.get('required_scope', tool_name)
             mcp_server_url = error_details.get('mcp_server_url')
             
-            # Safety check: if mcp_server_url is None, fail fast
-            if not mcp_server_url:
-                logger.error("❌ No MCP server URL found in error details - cannot process authorization error")
-                yield "❌ Cannot determine MCP server URL from error - unable to process authorization\n\n"
-                return
-            
-            # DEBUG: Log the extracted error details
-            logger.info(f"🔍 DEBUG: Full error content: {error_message}")
+            # Enhanced debugging for scope parsing
+            logger.info(f"🔍 DEBUG: Full error content: {full_content}")
             logger.info(f"🔍 DEBUG: Extracted error details: {error_details}")
             logger.info(f"🔍 DEBUG: tool_name={tool_name}, required_scope={required_scope}, mcp_server_url={mcp_server_url}")
             
-            # Prevent infinite retry loops
-            if retry_count >= 2:
-                logger.error(f"❌ Maximum retry attempts reached ({retry_count}), giving up")
-                yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the admin dashboard."
-                return
-            
-            # For Keycloak: Use token exchange API to get additional scope
-            logger.info(f"🔄 Attempting Keycloak token exchange for scope: {required_scope}")
+            # Check if this is a Llama Stack authorization error
+            if "llama" in error_message.lower() and ("authorization" in error_message.lower() or "scope" in error_message.lower()):
+                logger.info("🔐 Detected Llama Stack authorization error")
                 
-            # Ensure scope has proper prefix
-            if not required_scope.startswith('mcp:'):
-                required_scope = f'mcp:{required_scope}'
-            
-            try:
-                # Import the token exchange function from our API
-                import sys
-                import os
-                sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                # Extract error details for Llama Stack scope errors
+                error_details = extract_authorization_error_details(error_message)
+                tool_name = error_details.get('tool_name', 'llama_stack_api')
+                required_scope = error_details.get('required_scope', 'llama:agent_create')
+                llama_scopes = error_details.get('llama_scopes', [required_scope])
                 
-                # Use the existing Keycloak token exchange endpoint
-                from api.tokens import exchange_token_for_audience
-                import asyncio
+                logger.info(f"🔍 Llama Stack scope error details: tool_name={tool_name}, required_scope={required_scope}, llama_scopes={llama_scopes}")
                 
-                access_token = session.get('access_token')
-                if not access_token:
-                    logger.error("❌ No access token available for token exchange")
-                    yield f"❌ Authentication error - please re-login\n"
+                # Prevent infinite retry loops
+                if retry_count >= 2:
+                    logger.error(f"❌ Maximum retry attempts reached ({retry_count}), giving up")
+                    yield f"❌ Llama Stack authorization failed after {retry_count} attempts. Please check permissions in the admin dashboard."
                     return
                 
-                # Get current MCP token scopes
-                current_mcp_token = session.get('mcp_token')
-                current_scopes = []
-                if current_mcp_token:
-                    try:
-                        import jwt
-                        decoded = jwt.decode(current_mcp_token, options={"verify_signature": False})
-                        current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
-                    except Exception:
-                        pass
+                # For Llama Stack: Use token exchange API to get additional scopes
+                logger.info(f"🔄 Attempting Keycloak token exchange for Llama Stack scopes: {llama_scopes}")
                 
-                # Add the required scope to current scopes
-                if required_scope not in current_scopes:
-                    current_scopes.append(required_scope)
-                
-                # Exchange token for new scopes using Keycloak
-                OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
-                result = asyncio.run(exchange_token_for_audience(
-                    access_token=access_token,
-                    audience=OIDC_CLIENT_ID,  # Self-exchange
-                    scopes=current_scopes
-                ))
-                
-                if result.get('success'):
-                    # Store the new MCP token
-                    new_mcp_token = result['access_token']
-                    session['mcp_token'] = new_mcp_token
-                    logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
+                try:
+                    # Import the token exchange function from our API
+                    import sys
+                    import os
+                    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                     
-                    # Retry the original request with new token
-                    yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
-                
-                    # Recursive retry with incremented count
-                    for retry_chunk in stream_agent_response_with_auth_detection(
-                        message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token
-                    ):
-                        yield retry_chunk
-                    return
-                else:
-                    error_msg = result.get('error', 'Unknown error')
-                    logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
-                    yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
-                    return
+                    # Use the existing Keycloak token exchange endpoint
+                    from api.tokens import exchange_token_for_audience
+                    import asyncio
                     
-            except Exception as e:
-                logger.error(f"❌ Exception during token exchange: {e}")
-                yield f"❌ Failed to acquire permission for `{tool_name}`: {str(e)}\n"
+                    # Use provided access_token instead of session access
+                    if not access_token:
+                        logger.error("❌ No access token available for token exchange")
+                        yield f"❌ Authentication error - please re-login\n"
+                        return
+                    
+                    # Get current Llama Stack token scopes from provided token
+                    current_scopes = []
+                    if bearer_token:
+                        try:
+                            import jwt
+                            decoded = jwt.decode(bearer_token, options={"verify_signature": False})
+                            current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
+                        except Exception:
+                            pass
+                    
+                    # Start with basic OIDC scopes and add the required Llama Stack scopes
+                    basic_scopes = ['email', 'profile']
+                    for scope in llama_scopes:
+                        if scope not in basic_scopes:
+                            basic_scopes.append(scope)
+                    
+                    logger.info(f"🔍 Current token scopes: {current_scopes}")
+                    logger.info(f"🔍 Requesting Llama Stack scopes: {basic_scopes}")
+                    
+                    # Exchange token for new scopes using Keycloak
+                    OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
+                    result = asyncio.run(exchange_token_for_audience(
+                        access_token=access_token,
+                        audience=OIDC_CLIENT_ID,  # Self-exchange
+                        scopes=basic_scopes
+                    ))
+                    
+                    if result.get('success'):
+                        # Get the new Llama Stack token
+                        new_llama_token = result['access_token']
+                        
+                        logger.info(f"✅ Successfully exchanged token for Llama Stack scopes: {llama_scopes}")
+                        
+                        # Note: We can't store in session here due to context issues
+                        # The new token will be passed to the retry call and can be stored by the caller
+                        logger.info(f"✅ New Llama Stack token obtained (will be stored by caller): {new_llama_token[:20]}...")
+                        
+                        # Retry the original request with new token
+                        yield f"🔄 **Acquired Llama Stack permissions for `{tool_name}` - retrying...**\n\n"
+                    
+                        # Recursive retry with incremented count and new tokens
+                        for retry_chunk in stream_agent_response_with_auth_detection(
+                            message, new_llama_token, user_email, original_message, auth_cookies, retry_count + 1, mcp_token, access_token
+                        ):
+                            yield retry_chunk
+                        return
+                    else:
+                        error_msg = result.get('error', 'Unknown error')
+                        logger.error(f"❌ Keycloak token exchange failed for Llama Stack: {error_msg}")
+                        yield f"❌ Llama Stack permission denied for `{tool_name}`. {error_msg}\n"
+                        return
+                        
+                except Exception as e:
+                    logger.error(f"❌ Exception during Llama Stack token exchange: {e}")
+                    yield f"❌ Failed to acquire Llama Stack permission for `{tool_name}`: {str(e)}\n"
+                    return
+                        
+            # Check if this is an MCP authorization error
+            if mcp_server_url and required_scope:
+                # Prevent infinite retry loops
+                if retry_count >= 2:
+                    logger.error(f"❌ Maximum retry attempts reached ({retry_count}), giving up")
+                    yield f"❌ Authorization failed after {retry_count} attempts. Please check permissions in the admin dashboard."
+                    return
+                        
+                # For Keycloak: Use token exchange API to get additional scope
+                logger.info(f"🔄 Attempting Keycloak token exchange for exact scope: {required_scope}")
+                # Note: Using exact scope as provided by MCP server (no modifications)
+                
+                try:
+                    # Import the token exchange function from our API
+                    import sys
+                    import os
+                    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                    
+                    # Use the existing Keycloak token exchange endpoint
+                    from api.tokens import exchange_token_for_audience
+                    import asyncio
+                    
+                    # Use provided access_token instead of session access
+                    if not access_token:
+                        logger.error("❌ No access token available for token exchange")
+                        yield f"❌ Authentication error - please re-login\n"
+                        return
+                    
+                    # Get current MCP token scopes from provided token
+                    current_scopes = []
+                    if mcp_token:
+                        try:
+                            import jwt
+                            decoded = jwt.decode(mcp_token, options={"verify_signature": False})
+                            current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
+                        except Exception:
+                            pass
+                    
+                    # Start with basic OIDC scopes and add the required scope
+                    # Don't include existing MCP scopes to avoid conflicts
+                    basic_scopes = ['email', 'profile']
+                    if required_scope not in basic_scopes:
+                        basic_scopes.append(required_scope)
+                    
+                    logger.info(f"🔍 Current token scopes: {current_scopes}")
+                    logger.info(f"🔍 Requesting scopes: {basic_scopes}")
+                    
+                    # Exchange token for new scopes using Keycloak
+                    OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "authentication-demo")
+                    result = asyncio.run(exchange_token_for_audience(
+                        access_token=access_token,
+                        audience=OIDC_CLIENT_ID,  # Self-exchange
+                        scopes=basic_scopes
+                    ))
+                    
+                    if result.get('success'):
+                        # Get the new MCP token
+                        new_mcp_token = result['access_token']
+                        
+                        logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
+                        
+                        # Note: We can't store in session here due to context issues
+                        # The new token will be passed to the retry call and can be stored by the caller
+                        logger.info(f"✅ New MCP token obtained (will be stored by caller): {new_mcp_token[:20]}...")
+                        
+                        # Retry the original request with new token
+                        yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
+                    
+                        # Recursive retry with incremented count and new tokens
+                        for retry_chunk in stream_agent_response_with_auth_detection(
+                                message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
+                        ):
+                            yield retry_chunk
+                        return
+                    else:
+                        error_msg = result.get('error', 'Unknown error')
+                        logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
+                        yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
+                        return
+                        
+                except Exception as e:
+                    logger.error(f"❌ Exception during token exchange: {e}")
+                    yield f"❌ Failed to acquire permission for `{tool_name}`: {str(e)}\n"
                 return
         
         # For other errors, yield error message

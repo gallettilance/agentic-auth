@@ -24,9 +24,21 @@ def get_mcp_tokens_for_user_direct(user_email: str) -> dict:
     """Get MCP tokens for a user from Flask session (Keycloak edition)"""
     logger.info(f"🔍 === get_mcp_tokens_for_user_direct START for {user_email} ===")
     
+    # Debug: Print stack trace to see where this is called from
+    import traceback
+    logger.info(f"🔍 DEBUG: get_mcp_tokens_for_user_direct called from:")
+    for line in traceback.format_stack()[-3:-1]:  # Show last 2 stack frames (excluding current)
+        logger.info(f"   {line.strip()}")
+    
     try:
         # Get MCP token from Flask session (exchanged during login)
-        mcp_token = session.get('mcp_token')
+        try:
+            mcp_token = session.get('mcp_token')
+        except RuntimeError:
+            # Outside request context - return empty tokens
+            logger.warning(f"⚠️ Cannot access Flask session outside request context for {user_email}")
+            logger.info(f"🔍 === get_mcp_tokens_for_user_direct END for {user_email} (no context) ===")
+            return {}
         
         if mcp_token:
             # Return tokens for the configured MCP server
@@ -78,6 +90,12 @@ def prepare_mcp_headers_for_user(user_email: str, mcp_token: Optional[str] = Non
     Prepare MCP headers for a user by using the provided MCP token or getting it from Flask session
     """
     logger.info(f"🔍 === prepare_mcp_headers_for_user START for {user_email} ===")
+    
+    # Debug: Print stack trace to see where this is called from
+    import traceback
+    logger.info(f"🔍 DEBUG: prepare_mcp_headers_for_user called from:")
+    for line in traceback.format_stack()[-3:-1]:  # Show last 2 stack frames (excluding current)
+        logger.info(f"   {line.strip()}")
     
     try:
         # Use provided token or try to get from Flask session

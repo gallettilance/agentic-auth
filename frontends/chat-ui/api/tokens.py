@@ -101,6 +101,78 @@ async def exchange_token_for_audience(access_token: str, audience: str, scopes: 
         logger.error(f"Exception during token exchange: {e}")
         return {'success': False, 'error': str(e)}
 
+@tokens_bp.route('/llama-stack-token-info')
+def get_llama_stack_token_info():
+    """Get current Llama Stack token information from LlamaStackClient"""
+    if 'authenticated' not in session:
+        logger.warning("❌ Llama Stack token info requested but user not authenticated")
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        user_email = session.get('user_email')
+        
+        # Try to get the current token from LlamaStackClient
+        current_token = None
+        client_message = "No LlamaStackClient available"
+        
+        # Import the utils module to access the global user_agents
+        from utils.llama_agents_utils import user_agents
+        
+        if user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            
+            if llama_client:
+                try:
+                    # Query the client for its current token
+                    if hasattr(llama_client, 'get_current_token'):
+                        current_token = llama_client.get_current_token()
+                        client_message = "Token from LlamaStackClient"
+                        logger.info(f"🔍 Retrieved current token from LlamaStackClient for {user_email}")
+                    elif hasattr(llama_client, 'api_key'):
+                        current_token = llama_client.api_key
+                        client_message = "Token from LlamaStackClient.api_key"
+                        logger.info(f"🔍 Retrieved current token from LlamaStackClient.api_key for {user_email}")
+                    else:
+                        raise Exception("LlamaStackClient has no method to get current token")
+                except Exception as client_error:
+                    logger.warning(f"⚠️ Could not get token from LlamaStackClient: {client_error}")
+                    client_message = f"Error querying LlamaStackClient: {client_error}"
+        
+        # Fallback to session token if client query failed
+        if not current_token:
+            current_token = session.get('llama_stack_token')
+            client_message = "Token from session (fallback)"
+        
+        if not current_token:
+            return jsonify({
+                'has_token': False,
+                'token_type': None,
+                'token_preview': None,
+                'token_length': 0,
+                'oauth2_enabled': True,
+                'message': 'No Llama Stack token available - client handles its own exchange'
+            })
+        
+        # Basic token info
+        token_info = {
+            'has_token': True,
+            'token_type': 'jwt' if current_token.startswith('eyJ') else 'opaque',
+            'token_preview': current_token[:10] + '...' + current_token[-10:] if len(current_token) > 20 else current_token,
+            'token_length': len(current_token),
+            'oauth2_enabled': True,
+            'current_token': current_token,
+            'message': client_message
+        }
+        
+        logger.info(f"🔍 Llama Stack token info: has_token={token_info.get('has_token')}, token_type={token_info.get('token_type')}, source={client_message}")
+        
+        return jsonify(token_info)
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting Llama Stack token info: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @tokens_bp.route('/token-info')
 def get_token_info():
     """Display current tokens - tokens should be automatically exchanged during login"""
@@ -109,7 +181,7 @@ def get_token_info():
         return jsonify({'error': 'Not authenticated'}), 401
     
     try:
-        # Get tokens from session (exchanged automatically during login callback)
+        # Get tokens from session (zero-trust: exchanged on-demand, not during login)
         access_token = session.get('access_token')
         llama_stack_token = session.get('llama_stack_token')
         mcp_token = session.get('mcp_token')
@@ -123,8 +195,8 @@ def get_token_info():
                     'token': None,
                     'audience': audience_default,
                     'scopes': [],
-                    'status': 'missing',
-                    'message': f'{token_type} token not obtained during login - check logs for errors'
+                    'status': 'not_exchanged',
+                    'message': f'🔒 Zero-trust: {token_type} token will be exchanged when first needed'
                 }
             
             try:
@@ -132,15 +204,29 @@ def get_token_info():
                 decoded = jwt.decode(token, options={"verify_signature": False})
                 # Log full token for debugging
                 logger.info(f"🎫 {token_type} token decoded: aud={decoded.get('aud')}, scope={decoded.get('scope')}, exp={decoded.get('exp')}")
+                
+                scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
+                
+                # Check if this is a minimal token (no service-specific scopes)
+                if token_type == 'MCP' and not any(scope.startswith('mcp:') for scope in scopes):
+                    status = 'minimal_scope'
+                    message = f'{token_type} token ready (minimal scope - MCP scopes will be acquired on-demand)'
+                elif token_type == 'Llama Stack' and not any(scope.startswith('llama:') for scope in scopes):
+                    status = 'minimal_scope'
+                    message = f'{token_type} token ready (minimal scope - Llama scopes will be acquired on-demand)'
+                else:
+                    status = 'available'
+                    message = f'{token_type} token ready for use'
+                
                 return {
                     'token': token,
                     'audience': decoded.get('aud', audience_default),
-                    'scopes': decoded.get('scope', '').split() if decoded.get('scope') else [],
+                    'scopes': scopes,
                     'expires': decoded.get('exp'),
                     'issued': decoded.get('iat'),
                     'roles': decoded.get('realm_access', {}).get('roles', []),
-                    'status': 'available',
-                    'message': f'{token_type} token ready for use'
+                    'status': status,
+                    'message': message
                 }
             except Exception as e:
                 logger.error(f"❌ Error decoding {token_type} token: {e}")
@@ -185,11 +271,12 @@ def refresh_llama_stack_token():
         if not OIDC_CLIENT_ID:
             return jsonify({'error': 'OIDC client ID not configured'}), 500
         
-        # Exchange token for Llama Stack scopes - using proper prefixes
+        # 🔒 ZERO-TRUST: Exchange token for basic OIDC scopes initially
         llama_scopes = [
-            'llama:agent_create',
-            'llama:agent_session_create', 
-            'llama:inference_chat_completion'
+            'email',      # Basic: User email
+            'profile'     # Basic: User profile
+            # Note: Llama scopes like 'llama:agent_create', 'llama:inference_chat_completion' 
+            # will be exchanged when specific Llama Stack features are used
         ]
         
         result = asyncio.run(exchange_token_for_audience(
@@ -232,13 +319,13 @@ def refresh_mcp_token():
         if not OIDC_CLIENT_ID:
             return jsonify({'error': 'OIDC client ID not configured'}), 500
         
-        # Get current scopes or request basic ones - using proper MCP prefixes
+        # 🔒 ZERO-TRUST: Get current scopes or request basic OIDC scopes initially
         request_data = request.json if request.json else {}
         current_scopes = request_data.get('scopes', [
-            'mcp:list_files', 
-            'mcp:get_server_info', 
-            'mcp:health_check', 
-            'mcp:list_tool_scopes'
+            'email',      # Basic: User email
+            'profile'     # Basic: User profile
+            # Note: MCP scopes like 'mcp:health_check', 'mcp:get_server_info' 
+            # will be exchanged on-demand when specific tools are used
         ])
         
         result = asyncio.run(exchange_token_for_audience(
@@ -280,10 +367,6 @@ def exchange_mcp_token_scope():
         required_scope = data.get('required_scope')
         if not required_scope:
             return jsonify({'error': 'No required_scope provided'}), 400
-        
-        # Ensure scope has proper prefix
-        if not required_scope.startswith('mcp:'):
-            required_scope = f'mcp:{required_scope}'
         
         access_token = session.get('access_token')
         current_mcp_token = session.get('mcp_token')
@@ -518,6 +601,7 @@ def auto_retry():
         response_content = ""
         try:
             mcp_token = session.get('mcp_token')  # Get MCP token from session while in request context
+            access_token = session.get('access_token')  # Get access token from session while in request context
             for chunk in stream_agent_response_with_auth_detection(
                 original_message, 
                 bearer_token, 
@@ -525,7 +609,8 @@ def auto_retry():
                 original_message,
                 auth_cookies,
                 retry_count=0,
-                mcp_token=mcp_token  # Pass MCP token to avoid context issues
+                mcp_token=mcp_token,  # Pass MCP token to avoid context issues
+                access_token=access_token  # Pass access token to avoid context issues
             ):
                 response_content += chunk
             

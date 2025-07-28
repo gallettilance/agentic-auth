@@ -27,10 +27,20 @@ SCOPE_DEFINITIONS = {
     "mcp:list_tool_scopes": {"description": "List tool scopes via MCP", "risk_level": "low", "min_role": "user"},
     "mcp:execute_command": {"description": "Execute commands via MCP (admin only)", "risk_level": "critical", "min_role": "admin"},
     
-    # Llama Stack Scopes
-    "llama:agent_create": {"description": "Create agents via Llama Stack", "risk_level": "medium", "min_role": "user"},
-    "llama:agent_session_create": {"description": "Create agent sessions via Llama Stack", "risk_level": "medium", "min_role": "user"},
-    "llama:inference_chat_completion": {"description": "Chat completion via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    # Llama Stack Scopes (Official scopes only)
+    "llama:inference": {"description": "Inference via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:models:read": {"description": "Read models via Llama Stack", "risk_level": "low", "min_role": "user"},
+    "llama:models:write": {"description": "Write models via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:agents:read": {"description": "Read agents via Llama Stack", "risk_level": "low", "min_role": "user"},
+    "llama:agents:write": {"description": "Write agents via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:tools": {"description": "Use tools via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:toolgroups:read": {"description": "Read tool groups via Llama Stack", "risk_level": "low", "min_role": "user"},
+    "llama:toolgroups:write": {"description": "Write tool groups via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:vector_dbs:read": {"description": "Read vector databases via Llama Stack", "risk_level": "low", "min_role": "user"},
+    "llama:vector_dbs:write": {"description": "Write vector databases via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:safety": {"description": "Safety features via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:eval": {"description": "Evaluation features via Llama Stack", "risk_level": "medium", "min_role": "user"},
+    "llama:admin": {"description": "Admin access via Llama Stack", "risk_level": "critical", "min_role": "admin"},
 }
 
 # Role definitions
@@ -39,12 +49,14 @@ ROLE_DEFINITIONS = {
         "description": "Standard user with basic operational permissions",
         "scopes": [
             "mcp:list_files", "mcp:health_check", "mcp:get_server_info", "mcp:list_tool_scopes",
-            "llama:agent_create", "llama:agent_session_create", "llama:inference_chat_completion"
+            "llama:inference", "llama:models:read", "llama:models:write", "llama:agents:read", 
+            "llama:agents:write", "llama:tools", "llama:toolgroups:read", "llama:toolgroups:write",
+            "llama:vector_dbs:read", "llama:vector_dbs:write", "llama:safety", "llama:eval"
         ]
     },
     "admin": {
         "description": "System administrator with full system access",
-        "scopes": list(SCOPE_DEFINITIONS.keys())  # All scopes
+        "scopes": list(SCOPE_DEFINITIONS.keys())  # All scopes including llama:admin
     }
 }
 
@@ -612,6 +624,50 @@ class KeycloakV2Setup:
                 success = False
         
         return success
+
+    def cleanup_old_scopes(self) -> bool:
+        """Clean up old scopes that are no longer needed"""
+        print("🧹 Cleaning up old scopes...")
+        
+        old_scopes_to_remove = [
+            "llama:agent_create",
+            "llama:agent_session_create", 
+            "llama:inference_chat_completion"
+        ]
+        
+        for scope_name in old_scopes_to_remove:
+            # Remove from client scopes
+            try:
+                response = requests.delete(
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes/{scope_name}",
+                    headers=self.headers
+                )
+                if response.status_code == 204:
+                    print(f"✅ Removed client scope: {scope_name}")
+                elif response.status_code == 404:
+                    print(f"⚠️ Client scope not found: {scope_name}")
+                else:
+                    print(f"⚠️ Failed to remove client scope {scope_name}: {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ Error removing client scope {scope_name}: {e}")
+            
+            # Remove from authorization scopes
+            try:
+                response = requests.delete(
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope/{scope_name}",
+                    headers=self.headers
+                )
+                if response.status_code == 204:
+                    print(f"✅ Removed authorization scope: {scope_name}")
+                elif response.status_code == 404:
+                    print(f"⚠️ Authorization scope not found: {scope_name}")
+                else:
+                    print(f"⚠️ Failed to remove authorization scope {scope_name}: {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ Error removing authorization scope {scope_name}: {e}")
+        
+        print("✅ Old scopes cleanup completed")
+        return True
 
     def create_authorization_scopes(self) -> bool:
         """Create authorization scopes for fine-grained access control"""
@@ -1257,6 +1313,7 @@ class KeycloakV2Setup:
             ("🏢 Create client", self.create_client),
             ("🎯 Add self-audience mapper", self.add_self_audience_mapper),
             ("👥 Create client roles", self.create_client_roles),
+            ("🧹 Clean up old scopes", self.cleanup_old_scopes),
             ("🎯 Create client scopes", self.create_client_scopes),
             ("👥 Assign client roles to scopes", self.assign_client_roles_to_scopes),
             ("🔗 Assign scopes to client", self.assign_scopes_to_client),

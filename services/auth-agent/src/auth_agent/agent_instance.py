@@ -268,19 +268,44 @@ class AuthChatAgent(ChatAgent):
         """Check if error message indicates an authorization issue"""
         error_lower = error_message.lower()
         
-        authorization_indicators = [
+        # Debug logging
+        logger.info(f"🔍 DEBUG: Checking if '{error_message}' is an authorization error")
+        
+        # First, check if this is actually a successful response despite error indicators
+        # If the message contains successful data (like file listings), it's not an error
+        # But be careful - "files" in error message could be part of tool name like "list_files"
+        if ("success" in error_lower and "true" in error_lower):
+            logger.info(f"🔍 DEBUG: Detected successful response, not an error")
+            return False
+        
+        # Check for actual error indicators
+        error_indicators = [
             "authorizationerror",
-            "authorization required",
             "authorization failed",
             "insufficientscopeerror", 
             "insufficient scope",
             "access denied",
             "unauthorized",
             "permission denied",
-            "forbidden"
+            "forbidden",
+            "401",
+            "403"
         ]
         
-        return any(indicator in error_lower for indicator in authorization_indicators)
+        # If we find actual error indicators, it's definitely an auth error
+        for indicator in error_indicators:
+            if indicator in error_lower:
+                logger.info(f"🔍 DEBUG: Found error indicator '{indicator}' in message")
+                return True
+        
+        # Check for "authorization required" but be more careful
+        # Only match if it's clearly an error message, not a successful response
+        if "authorization required" in error_lower:
+            logger.info(f"🔍 DEBUG: Found 'authorization required' in message")
+            return True
+        
+        logger.info(f"🔍 DEBUG: No error indicators found in message")
+        return False
     
     def _extract_authorization_error_details(self, error_message: str) -> dict:
         """Extract details from authorization error messages"""
