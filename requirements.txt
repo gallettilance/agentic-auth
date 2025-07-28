@@ -6,7 +6,7 @@ annotated-types==0.7.0
 anyio==4.9.0
 asyncpg==0.30.0
 attrs==25.3.0
--e git+ssh://git@github.com/gallettilance/agentic-auth.git@cb77bdf14ade37ebd16c49202250b0e61da145a0#egg=auth_agent&subdirectory=services/auth-agent
+-e git+ssh://git@github.com/gallettilance/agentic-auth.git@60ea66a918c9d3c32d2c3169f25f2d86ed9c0066#egg=auth_agent&subdirectory=services/auth-agent
 Authlib==1.6.0
 bcrypt==4.3.0
 blinker==1.9.0
