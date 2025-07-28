@@ -7,15 +7,16 @@ Configures realm, client, scopes, roles, authorization policies, and users
 import requests
 import time
 import json
+import os
 import base64
 from typing import List, Dict, Optional
 import sys
 
 # Configuration
-KEYCLOAK_URL = "http://localhost:8002"
-REALM_NAME = "authentication-demo"
-CLIENT_ID = "authentication-demo"
-CLIENT_SECRET = "demo-client-secret-change-in-production"
+KEYCLOAK_URL = os.getenv("KEYCLOAK_ENV", "http://localhost:8002")
+KEYCLOAK_REALM_NAME = os.getenv("KEYCLOAK_REALM_NAME", "authentication-demo")
+KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "authentication-demo")
+KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", "demo-client-secret-change-in-production")
 
 # Scopes configuration with role requirements
 SCOPE_DEFINITIONS = {
@@ -128,7 +129,7 @@ class KeycloakV2Setup:
     def create_realm(self) -> bool:
         """Create the authentication realm with Token Exchange V2 settings"""
         realm_config = {
-            "realm": REALM_NAME,
+            "realm": KEYCLOAK_REALM_NAME,
             "displayName": "Token Exchange V2 Demo Realm",
             "enabled": True,
             "registrationAllowed": False,
@@ -144,19 +145,19 @@ class KeycloakV2Setup:
         }
         
         # Check if realm exists
-        response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}", headers=self.headers)
+        response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}", headers=self.headers)
         if response.status_code == 200:
-            print(f"✅ Realm {REALM_NAME} already exists")
+            print(f"✅ Realm {KEYCLOAK_REALM_NAME} already exists")
             return True
         
         # Create realm
         response = requests.post(f"{KEYCLOAK_URL}/admin/realms", headers=self.headers, json=realm_config)
         
         if response.status_code == 201:
-            print(f"✅ Created realm: {REALM_NAME}")
+            print(f"✅ Created realm: {KEYCLOAK_REALM_NAME}")
             return True
         elif response.status_code == 409:
-            print(f"✅ Realm {REALM_NAME} already exists")
+            print(f"✅ Realm {KEYCLOAK_REALM_NAME} already exists")
             return True
         else:
             print(f"❌ Failed to create realm: {response.status_code}")
@@ -167,12 +168,12 @@ class KeycloakV2Setup:
     def create_client(self) -> bool:
         """Create confidential client with Token Exchange V2 enabled"""
         client_config = {
-            "clientId": CLIENT_ID,
+            "clientId": KEYCLOAK_CLIENT_ID,
             "name": "Token Exchange V2 Client",
             "description": "Single confidential client for Token Exchange V2 self-exchange",
             "enabled": True,
             "clientAuthenticatorType": "client-secret",  # Required: V2 only supports confidential clients
-            "secret": CLIENT_SECRET,
+            "secret": KEYCLOAK_CLIENT_SECRET,
             "redirectUris": [
                 "http://localhost:3000/*",
                 "http://localhost:5000/*",
@@ -202,8 +203,8 @@ class KeycloakV2Setup:
             "attributes": {
                 "post.logout.redirect.uris": "+",
                 "oauth2.device.authorization.grant.enabled": "false",
-                "oidc.ciba.grant.enabled": "false"
-                # NOTE: token-exchange.grant.enabled must be set manually in Keycloak Admin UI
+                "oidc.ciba.grant.enabled": "false",
+                "standard.token.exchange.enabled": "true"
             },
             "defaultClientScopes": ["openid", "profile", "email"],  # Minimal initial scopes
             # CRITICAL: For self-exchange, the client must be able to issue tokens to itself
@@ -214,19 +215,19 @@ class KeycloakV2Setup:
         
         # Check if client exists
         response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients",
-            params={"clientId": CLIENT_ID},
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients",
+            params={"clientId": KEYCLOAK_CLIENT_ID},
             headers=self.headers
         )
         
         if response.status_code == 200 and response.json():
             self.client_uuid = response.json()[0]['id']
-            print(f"✅ Client {CLIENT_ID} already exists (UUID: {self.client_uuid})")
+            print(f"✅ Client {KEYCLOAK_CLIENT_ID} already exists (UUID: {self.client_uuid})")
             
             # Update existing client with token exchange configuration
             print(f"🔄 Updating client with Token Exchange V2 settings...")
             update_response = requests.put(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}",
                 headers=self.headers,
                 json=client_config
             )
@@ -244,7 +245,7 @@ class KeycloakV2Setup:
         
         # Create client
         response = requests.post(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients",
             headers=self.headers,
             json=client_config
         )
@@ -252,12 +253,12 @@ class KeycloakV2Setup:
         if response.status_code == 201:
             # Get the created client UUID
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients",
-                params={"clientId": CLIENT_ID},
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients",
+                params={"clientId": KEYCLOAK_CLIENT_ID},
                 headers=self.headers
             )
             self.client_uuid = response.json()[0]['id']
-            print(f"✅ Created client: {CLIENT_ID} (UUID: {self.client_uuid})")
+            print(f"✅ Created client: {KEYCLOAK_CLIENT_ID} (UUID: {self.client_uuid})")
             # Verify token exchange is enabled
             self._verify_token_exchange_enabled()
             return True
@@ -272,7 +273,7 @@ class KeycloakV2Setup:
         try:
             # Get client configuration
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}",
                 headers=self.headers
             )
             
@@ -315,12 +316,12 @@ class KeycloakV2Setup:
             }
         }
         
-        response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/client-scopes", headers=self.headers)
+        response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes", headers=self.headers)
         existing_scopes = {scope['name'] for scope in response.json()}
         
         if "token-exchange" not in existing_scopes:
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/client-scopes",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes",
                 headers=self.headers,
                 json=token_exchange_scope
             )
@@ -349,7 +350,7 @@ class KeycloakV2Setup:
             }
             
             # Check if scope exists
-            response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/client-scopes", headers=self.headers)
+            response = requests.get(f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes", headers=self.headers)
             existing_scopes = {scope['name'] for scope in response.json()}
             
             if scope_name in existing_scopes:
@@ -358,7 +359,7 @@ class KeycloakV2Setup:
             
             # Create scope
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/client-scopes",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes",
                 headers=self.headers,
                 json=scope_payload
             )
@@ -379,7 +380,7 @@ class KeycloakV2Setup:
         
         # Get all client scopes
         response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/client-scopes",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes",
             headers=self.headers
         )
         
@@ -394,7 +395,7 @@ class KeycloakV2Setup:
         if "token-exchange" in scope_map:
             scope_uuid = scope_map["token-exchange"]
             response = requests.put(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/optional-client-scopes/{scope_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/optional-client-scopes/{scope_uuid}",
                 headers=self.headers
             )
             
@@ -415,7 +416,7 @@ class KeycloakV2Setup:
             
             # Assign as optional scope (users can request via token exchange)
             response = requests.put(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/optional-client-scopes/{scope_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/optional-client-scopes/{scope_uuid}",
                 headers=self.headers
             )
             
@@ -425,6 +426,63 @@ class KeycloakV2Setup:
                 print(f"❌ Failed to assign scope {scope_name}: {response.status_code}")
                 success = False
         
+        return success
+    
+    def assign_client_roles_to_scopes(self) -> bool:
+        """Assign roles to client scopes"""
+        success = True
+
+        # Get all client scopes
+        response = requests.get(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes",
+            headers=self.headers
+        )
+        
+        if response.status_code != 200:
+            print(f"❌ Failed to get client scopes: {response.status_code}")
+            return False
+        
+        all_scopes = response.json()
+        scope_map = {scope['name']: scope['id'] for scope in all_scopes}
+
+        for scope_name, scope_config in SCOPE_DEFINITIONS.items():
+        
+            if scope_name not in scope_map:
+                print(f"❌ Scope not found: {scope_name}")
+                success = False
+                continue
+        
+            scope_uuid = scope_map[scope_name]
+
+            for role_name, role_config in ROLE_DEFINITIONS.items():
+                if scope_name in role_config['scopes']:
+                    print(f"🔗 Assigning role '{role_name}' to scope '{scope_name}'")
+
+                    # Get the actual role ID
+                    role_id = self.get_client_role_id(role_name)
+                    if not role_id:
+                        print(f"❌ Could not find role ID for {role_name}")
+                        success = False
+                        continue
+
+                    role_payload = [{
+                        "id": role_id,
+                        "name": role_name
+                    }]
+
+                    # Assign role to client scope
+                    response = requests.post(
+                        f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/client-scopes/{scope_uuid}/scope-mappings/clients/{self.client_uuid}",
+                        headers=self.headers,
+                        json=role_payload
+                    )
+                
+                    if response.status_code == 204:
+                        print(f"✅ Assigned role to {role_name} to client scope {scope_name}")
+                    else:
+                        print(f"❌ Failed to assign role to {role_name} to client scope {scope_name}: {response.status_code}")
+                        success = False
+
         return success
 
     def add_self_audience_mapper(self) -> bool:
@@ -439,7 +497,7 @@ class KeycloakV2Setup:
             "protocolMapper": "oidc-audience-mapper",
             "consentRequired": False,
             "config": {
-                "included.client.audience": CLIENT_ID,  # Include this client in aud claim
+                "included.client.audience": KEYCLOAK_CLIENT_ID,  # Include this client in aud claim
                 "id.token.claim": "false",
                 "access.token.claim": "true"  # Add to access token aud claim
             }
@@ -463,7 +521,7 @@ class KeycloakV2Setup:
         
         # Check if mappers already exist
         response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
             headers=self.headers
         )
         
@@ -476,7 +534,7 @@ class KeycloakV2Setup:
         # Create audience mapper
         if "self-audience-mapper" not in existing_mappers:
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
                 headers=self.headers,
                 json=audience_mapper
             )
@@ -494,7 +552,7 @@ class KeycloakV2Setup:
         # Create sub claim mapper
         if "sub-claim-mapper" not in existing_mappers:
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/protocol-mappers/models",
                 headers=self.headers,
                 json=sub_claim_mapper
             )
@@ -530,7 +588,7 @@ class KeycloakV2Setup:
             
             # Check if role exists
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/roles/{role_name}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/roles/{role_name}",
                 headers=self.headers
             )
             
@@ -540,7 +598,7 @@ class KeycloakV2Setup:
             
             # Create role
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/roles",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/roles",
                 headers=self.headers,
                 json=role_payload
             )
@@ -568,7 +626,7 @@ class KeycloakV2Setup:
             
             # Check if authorization scope exists
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
                 headers=self.headers
             )
             
@@ -580,7 +638,7 @@ class KeycloakV2Setup:
             
             # Create authorization scope
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
                 headers=self.headers,
                 json=auth_scope_config
             )
@@ -611,7 +669,7 @@ class KeycloakV2Setup:
         
         # Check if resource exists
         response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
             headers=self.headers
         )
         
@@ -623,7 +681,7 @@ class KeycloakV2Setup:
         
         # Create the resource
         response = requests.post(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
             headers=self.headers,
             json=resource_config
         )
@@ -641,7 +699,7 @@ class KeycloakV2Setup:
     def get_client_role_id(self, role_name: str) -> Optional[str]:
         """Get the ID of a client role by name"""
         response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/roles/{role_name}",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/roles/{role_name}",
             headers=self.headers
         )
         
@@ -681,7 +739,7 @@ class KeycloakV2Setup:
             
             # Check if policy exists
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
                 headers=self.headers
             )
             
@@ -693,7 +751,7 @@ class KeycloakV2Setup:
             
             # Create policy
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy/role",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy/role",
                 headers=self.headers,
                 json=policy_config
             )
@@ -714,7 +772,7 @@ class KeycloakV2Setup:
         
         # Get all authorization scopes
         scopes_response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/scope",
             headers=self.headers
         )
         
@@ -726,7 +784,7 @@ class KeycloakV2Setup:
         
         # Get all policies
         policies_response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
             headers=self.headers
         )
         
@@ -763,7 +821,7 @@ class KeycloakV2Setup:
             
             # Get the application resource ID
             resource_response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/resource",
                 headers=self.headers
             )
             
@@ -793,7 +851,7 @@ class KeycloakV2Setup:
             
             # Check if permission exists and potentially update it
             permissions_response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission",
                 headers=self.headers
             )
             
@@ -808,12 +866,12 @@ class KeycloakV2Setup:
                 # Update existing permission to ensure correct policies
                 print(f"🔄 Updating existing permission: {permission_config['name']}")
                 response = requests.put(
-                    f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope/{existing_permission['id']}",
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope/{existing_permission['id']}",
                     headers=self.headers,
                     json=permission_config
                 )
                 
-                if response.status_code in [200, 204]:
+                if response.status_code in [200, 201, 204]:
                     print(f"✅ Scope permission updated: {permission_config['name']}")
                 else:
                     print(f"❌ Failed to update permission {permission_config['name']}: {response.status_code}")
@@ -823,7 +881,7 @@ class KeycloakV2Setup:
             else:
                 # Create new permission
                 response = requests.post(
-                    f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope",
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope",
                     headers=self.headers,
                     json=permission_config
                 )
@@ -856,7 +914,7 @@ class KeycloakV2Setup:
             
             # Check if user exists
             response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users",
                 params={"username": user_def["username"]},
                 headers=self.headers
             )
@@ -867,7 +925,7 @@ class KeycloakV2Setup:
             else:
                 # Create user
                 response = requests.post(
-                    f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users",
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users",
                     headers=self.headers,
                     json=user_config
                 )
@@ -883,7 +941,7 @@ class KeycloakV2Setup:
                 
                 # Get user UUID
                 response = requests.get(
-                    f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users",
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users",
                     params={"username": user_def["username"]},
                     headers=self.headers
                 )
@@ -903,7 +961,7 @@ class KeycloakV2Setup:
             }
             
             response = requests.put(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users/{user_uuid}/reset-password",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users/{user_uuid}/reset-password",
                 headers=self.headers,
                 json=password_config
             )
@@ -926,7 +984,7 @@ class KeycloakV2Setup:
         
         # Get client roles
         roles_resp = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/roles",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/roles",
             headers=self.headers
         )
         
@@ -946,7 +1004,7 @@ class KeycloakV2Setup:
         
         if roles_to_assign:
             response = requests.post(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users/{user_uuid}/role-mappings/clients/{self.client_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users/{user_uuid}/role-mappings/clients/{self.client_uuid}",
                 headers=self.headers,
                 json=roles_to_assign
             )
@@ -965,7 +1023,7 @@ class KeycloakV2Setup:
         print("=" * 50)
         print("🔧 Please enable Standard Token Exchange manually in Keycloak Admin UI:")
         print()
-        print("1. Open Keycloak Admin Console: http://localhost:8002/admin")
+        print("1. Open Keycloak Admin Console: ${KEYCLOAK_URL}/admin")
         print("2. Login with admin credentials")
         print("3. Navigate to: Clients → authentication-demo → Settings")
         print("4. Scroll down to 'Capability config' section")
@@ -973,8 +1031,8 @@ class KeycloakV2Setup:
         print("6. Click 'Save'")
         print()
         print("📋 Quick Navigation:")
-        print(f"   • Realm: {REALM_NAME}")
-        print(f"   • Client ID: {CLIENT_ID}")
+        print(f"   • Realm: {KEYCLOAK_REALM_NAME}")
+        print(f"   • Client ID: {KEYCLOAK_CLIENT_ID}")
         print("   • Setting: Standard token exchange (Capability config)")
         print()
         print("💡 This step is required because enabling token exchange via REST API")
@@ -1004,11 +1062,11 @@ class KeycloakV2Setup:
         # Test user authentication
         try:
             auth_response = requests.post(
-                f"{KEYCLOAK_URL}/realms/{REALM_NAME}/protocol/openid-connect/token",
+                f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}/protocol/openid-connect/token",
                 data={
                     'grant_type': 'password',
-                    'client_id': CLIENT_ID,
-                    'client_secret': CLIENT_SECRET,
+                    'client_id': KEYCLOAK_CLIENT_ID,
+                    'client_secret': KEYCLOAK_CLIENT_SECRET,
                     'username': 'lance',
                     'password': 'password',
                     'scope': 'openid profile email'
@@ -1022,17 +1080,17 @@ class KeycloakV2Setup:
                 # Test token exchange for MCP scopes (Token Exchange V2 self-exchange pattern)
                 print("   🔄 Testing token exchange: basic token -> scoped token")
                 exchange_response = requests.post(
-                    f"{KEYCLOAK_URL}/realms/{REALM_NAME}/protocol/openid-connect/token",
+                    f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}/protocol/openid-connect/token",
                     data={
                         'grant_type': 'urn:ietf:params:oauth:grant-type:token-exchange',
                         'subject_token': user_token,
                         'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                         'requested_token_type': 'urn:ietf:params:oauth:token-type:access_token',
-                        'audience': CLIENT_ID,
+                        'audience': KEYCLOAK_CLIENT_ID,
                         'scope': 'mcp:list_files mcp:health_check'
                     },
                     headers={
-                        'Authorization': f'Basic {base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()}',
+                        'Authorization': f'Basic {base64.b64encode(f"{KEYCLOAK_CLIENT_ID}:{KEYCLOAK_CLIENT_SECRET}".encode()).decode()}',
                         'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 )
@@ -1086,7 +1144,7 @@ class KeycloakV2Setup:
             
             # Get user ID
             user_response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users",
                 headers=self.headers,
                 params={"username": username}
             )
@@ -1099,7 +1157,7 @@ class KeycloakV2Setup:
             
             # Get actual client role assignments
             roles_response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/users/{user_id}/role-mappings/clients/{self.client_uuid}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/users/{user_id}/role-mappings/clients/{self.client_uuid}",
                 headers=self.headers
             )
             
@@ -1130,7 +1188,7 @@ class KeycloakV2Setup:
             
         # Get all permissions
         permissions_response = requests.get(
-            f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission",
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission",
             headers=self.headers
         )
         
@@ -1154,7 +1212,7 @@ class KeycloakV2Setup:
             
             # Get detailed permission info
             detail_response = requests.get(
-                f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope/{permission['id']}",
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/permission/scope/{permission['id']}",
                 headers=self.headers
             )
             
@@ -1169,7 +1227,7 @@ class KeycloakV2Setup:
                 
                 # Get policy names for these IDs
                 policies_response = requests.get(
-                    f"{KEYCLOAK_URL}/admin/realms/{REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}/clients/{self.client_uuid}/authz/resource-server/policy",
                     headers=self.headers
                 )
                 
@@ -1198,16 +1256,17 @@ class KeycloakV2Setup:
             ("📋 Create realm", self.create_realm),
             ("🏢 Create client", self.create_client),
             ("🎯 Add self-audience mapper", self.add_self_audience_mapper),
-            ("🎯 Create client scopes", self.create_client_scopes),
-            ("🔗 Assign scopes to client", self.assign_scopes_to_client),
             ("👥 Create client roles", self.create_client_roles),
+            ("🎯 Create client scopes", self.create_client_scopes),
+            ("👥 Assign client roles to scopes", self.assign_client_roles_to_scopes),
+            ("🔗 Assign scopes to client", self.assign_scopes_to_client),
             ("🔐 Create authorization scopes", self.create_authorization_scopes),
             ("📦 Create authorization resources", self.create_authorization_resources),
             ("📜 Create authorization policies", self.create_authorization_policies),
             ("🛡️ Create scope permissions", self.create_scope_permissions),
             ("👤 Create users", self.create_users),
             ("🔍 Debug roles and permissions", self.debug_user_roles_and_permissions),
-            ("⏸️ Manual token exchange setup", self.wait_for_manual_token_exchange_setup),
+            # ("⏸️ Manual token exchange setup", self.wait_for_manual_token_exchange_setup),
             ("🧪 Test setup", self.test_token_exchange_setup)
         ]
         
@@ -1229,8 +1288,8 @@ class KeycloakV2Setup:
         print("✅ Token exchange functionality tested successfully")
         print()
         print("📝 Configuration Summary:")
-        print(f"   • Realm: {REALM_NAME}")
-        print(f"   • Client: {CLIENT_ID}")
+        print(f"   • Realm: {KEYCLOAK_REALM_NAME}")
+        print(f"   • Client: {KEYCLOAK_CLIENT_ID}")
         print(f"   • Scopes: {len(SCOPE_DEFINITIONS)} custom scopes")
         print(f"   • Roles: {len(ROLE_DEFINITIONS)} client roles")
         print(f"   • Users: {len(USER_DEFINITIONS)} test users")
@@ -1251,9 +1310,9 @@ class KeycloakV2Setup:
         print("Copy these values to your .env files:")
         print()
         print("Frontend (.env or config file):")
-        print(f"OIDC_ISSUER_URL={KEYCLOAK_URL}/realms/{REALM_NAME}")
-        print(f"OIDC_CLIENT_ID={CLIENT_ID}")
-        print(f"OIDC_CLIENT_SECRET={CLIENT_SECRET}")
+        print(f"OIDC_ISSUER_URL={KEYCLOAK_URL}/realms/{KEYCLOAK_REALM_NAME}")
+        print(f"OIDC_CLIENT_ID={KEYCLOAK_CLIENT_ID}")
+        print(f"OIDC_CLIENT_SECRET={KEYCLOAK_CLIENT_SECRET}")
         print()
         print("Chat UI specific:")
         print("CHAT_UI_PORT=5001")
@@ -1265,7 +1324,7 @@ class KeycloakV2Setup:
         print("FLASK_ENV=development")
         print()
         print("⚠️  SECURITY NOTE:")
-        print(f"   Client secret '{CLIENT_SECRET}' is for demo only!")
+        print(f"   Client secret '{KEYCLOAK_CLIENT_SECRET}' is for demo only!")
         print("   Change this in production environments.")
         
         return True

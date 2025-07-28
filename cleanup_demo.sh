@@ -5,12 +5,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+source "$SCRIPT_DIR/scripts/demo_utils.sh"
 
 echo -e "${BLUE}🧹 Token Exchange V2 Demo Cleanup${NC}"
 echo "====================================="
@@ -36,7 +33,7 @@ echo ""
 echo -e "${BLUE}🛑 Stopping all demo services first...${NC}"
 
 # Stop services first
-./stop_demo.sh > /dev/null 2>&1 || true
+$SCRIPT_DIR/stop_demo.sh > /dev/null 2>&1 || true
 
 echo ""
 echo -e "${BLUE}🗑️  Cleaning up demo artifacts...${NC}"
@@ -54,76 +51,78 @@ safe_remove() {
     fi
 }
 
-# Clean up Keycloak
-echo ""
-echo -e "${YELLOW}🔐 Keycloak Token Exchange V2 cleanup:${NC}"
-if docker ps -a -q -f name=keycloak | grep -q .; then
-    echo -e "${YELLOW}🔄 Removing Keycloak container...${NC}"
-    docker rm -f keycloak >/dev/null 2>&1
-    echo -e "${GREEN}✅ Keycloak container removed${NC}"
-else
-    echo -e "${YELLOW}⚠️  Keycloak container not found (already clean)${NC}"
-fi
-
-# Clean up Keycloak data volumes
-echo -e "${YELLOW}🔄 Removing Keycloak data volume...${NC}"
-if docker volume ls -q | grep -q "keycloak_data"; then
-    docker volume rm keycloak_data >/dev/null 2>&1 || true
-    echo -e "${GREEN}✅ Removed Keycloak data volume${NC}"
-else
-    echo -e "${YELLOW}⚠️  Keycloak data volume not found (already clean)${NC}"
-fi
-
-# Clean up any other keycloak-related volumes
-docker volume ls -q -f name=keycloak | while read volume; do
-    if [ ! -z "$volume" ]; then
-        docker volume rm "$volume" >/dev/null 2>&1 || true
-        echo -e "${GREEN}✅ Removed volume: $volume${NC}"
+if [ "$KEYCLOAK_RUN_CONTAINER" = true ] ; then
+    # Clean up Keycloak
+    echo ""
+    echo -e "${YELLOW}🔐 Keycloak Token Exchange V2 cleanup:${NC}"
+    if $CONTAINER_RUNTIME ps -a -q -f name=$KEYCLOAK_CONTAINER_NAME | grep -q .; then
+        echo -e "${YELLOW}🔄 Removing Keycloak container...${NC}"
+        $CONTAINER_RUNTIME rm -f $KEYCLOAK_CONTAINER_NAME >/dev/null 2>&1
+        echo -e "${GREEN}✅ Keycloak container removed${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Keycloak container not found (already clean)${NC}"
     fi
-done
 
-# Also remove any unnamed volumes that might be from Keycloak
-echo -e "${YELLOW}🔄 Cleaning up dangling volumes...${NC}"
-docker volume prune -f >/dev/null 2>&1 || true
-echo -e "${GREEN}✅ Cleaned up dangling volumes${NC}"
+    # Clean up Keycloak data volumes
+    echo -e "${YELLOW}🔄 Removing Keycloak data volume...${NC}"
+    if $CONTAINER_RUNTIME volume ls -q | grep -q "$KEYCLOAK_VOLUME_NAME"; then
+        $CONTAINER_RUNTIME volume rm "$KEYCLOAK_VOLUME_NAME" >/dev/null 2>&1 || true
+        echo -e "${GREEN}✅ Removed Keycloak data volume${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Keycloak data volume not found (already clean)${NC}"
+    fi
+
+    # Clean up any other keycloak-related volumes
+    $CONTAINER_RUNTIME volume ls -q -f name=$KEYCLOAK_CONTAINER_NAME | while read volume; do
+        if [ ! -z "$volume" ]; then
+            $CONTAINER_RUNTIME volume rm "$volume" >/dev/null 2>&1 || true
+            echo -e "${GREEN}✅ Removed volume: $volume${NC}"
+        fi
+    done
+
+    # Also remove any unnamed volumes that might be from Keycloak
+    echo -e "${YELLOW}🔄 Cleaning up dangling volumes...${NC}"
+    $CONTAINER_RUNTIME volume prune -f >/dev/null 2>&1 || true
+    echo -e "${GREEN}✅ Cleaned up dangling volumes${NC}"
+fi
 
 # Clean up databases
 echo ""
 echo -e "${YELLOW}📊 Database cleanup:${NC}"
-safe_remove "auth-server/auth.db" "auth database"
-safe_remove "auth.db" "auth database (root)"
-safe_remove "responses.db" "responses database"
-safe_remove "kvstore.db" "key-value store database"
+safe_remove "$SCRIPT_DIR/auth-server/auth.db" "auth database"
+safe_remove "$SCRIPT_DIR/auth.db" "auth database (root)"
+safe_remove "$SCRIPT_DIR/responses.db" "responses database"
+safe_remove "$SCRIPT_DIR/kvstore.db" "key-value store database"
 
 # Clean up JWT keys
 echo ""
 echo -e "${YELLOW}🔑 JWT keys cleanup:${NC}"
-safe_remove "auth-server/keys/" "JWT keys directory"
+safe_remove "$SCRIPT_DIR/auth-server/keys/" "JWT keys directory"
 
 # Clean up logs
 echo ""
 echo -e "${YELLOW}📝 Log files cleanup:${NC}"
-safe_remove "logs/" "logs directory"
-safe_remove "cookies.txt" "HTTP cookies file"
+safe_remove "$SCRIPT_DIR/logs/" "logs directory"
+safe_remove "$SCRIPT_DIR/cookies.txt" "HTTP cookies file"
 
 # Clean up session/cache files
 echo ""
 echo -e "${YELLOW}💾 Session/cache cleanup:${NC}"
-safe_remove "demo_pids.txt" "process IDs file"
-safe_remove "__pycache__/" "Python cache (root)"
-safe_remove "auth-server/__pycache__/" "Python cache (auth-server)"
-safe_remove "frontends/__pycache__/" "Python cache (frontends)"
-safe_remove "frontends/chat-ui/__pycache__/" "Python cache (chat-ui)"
-safe_remove "frontends/admin-dashboard/__pycache__/" "Python cache (admin-dashboard)"
-safe_remove "mcp/__pycache__/" "Python cache (mcp)"
-safe_remove "services/__pycache__/" "Python cache (services)"
+safe_remove "$SCRIPT_DIR/demo_pids.txt" "process IDs file"
+safe_remove "$SCRIPT_DIR/__pycache__/" "Python cache (root)"
+safe_remove "$SCRIPT_DIR/auth-server/__pycache__/" "Python cache (auth-server)"
+safe_remove "$SCRIPT_DIR/frontends/__pycache__/" "Python cache (frontends)"
+safe_remove "$SCRIPT_DIR/frontends/chat-ui/__pycache__/" "Python cache (chat-ui)"
+safe_remove "$SCRIPT_DIR/frontends/admin-dashboard/__pycache__/" "Python cache (admin-dashboard)"
+safe_remove "$SCRIPT_DIR/mcp/__pycache__/" "Python cache (mcp)"
+safe_remove "$SCRIPT_DIR/services/__pycache__/" "Python cache (services)"
 
 # Clean up Python egg-info and build artifacts
 echo ""
 echo -e "${YELLOW}🥚 Python package artifacts:${NC}"
-safe_remove "services/auth-agent/src/auth_agent.egg-info/" "auth-agent egg-info"
-safe_remove "services/auth-agent/build/" "auth-agent build"
-safe_remove "services/auth-agent/dist/" "auth-agent dist"
+safe_remove "$SCRIPT_DIR/services/auth-agent/src/auth_agent.egg-info/" "auth-agent egg-info"
+safe_remove "$SCRIPT_DIR/services/auth-agent/build/" "auth-agent build"
+safe_remove "$SCRIPT_DIR/services/auth-agent/dist/" "auth-agent dist"
 
 # Clean up any .pyc files
 echo ""
@@ -200,10 +199,10 @@ verify_clean() {
     fi
 }
 
-verify_clean "auth-server/auth.db" "Auth database"
-verify_clean "auth-server/keys/" "JWT keys"
-verify_clean "logs/" "Log files"
-verify_clean "demo_pids.txt" "PID file"
+verify_clean "$SCRIPT_DIR/auth-server/auth.db" "Auth database"
+verify_clean "$SCRIPT_DIR/auth-server/keys/" "JWT keys"
+verify_clean "$SCRIPT_DIR/logs/" "Log files"
+verify_clean "$SCRIPT_DIR/demo_pids.txt" "PID file"
 
 echo ""
 echo -e "${GREEN}🎉 Token Exchange V2 demo cleanup completed successfully!${NC}"
@@ -218,7 +217,7 @@ echo "   ✅ Browser cookies for localhost"
 echo "   ✅ Background processes"
 echo ""
 echo -e "${GREEN}🚀 Ready for a fresh Token Exchange V2 demo start!${NC}"
-echo "   Run: ${BLUE}./start_demo.sh${NC}"
+echo "   Run: ${BLUE}$SCRIPT_DIR/start_demo.sh${NC}"
 echo ""
-echo -e "${YELLOW}💡 Tip: Use ./stop_demo.sh for normal shutdown (preserves data)${NC}"
-echo -e "${YELLOW}     Use ./cleanup_demo.sh for complete reset (removes everything)${NC}"
+echo -e "${YELLOW}💡 Tip: Use $SCRIPT_DIR/stop_demo.sh for normal shutdown (preserves data)${NC}"
+echo -e "${YELLOW}     Use $SCRIPT_DIR/cleanup_demo.sh for complete reset (removes everything)${NC}"
