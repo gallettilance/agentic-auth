@@ -487,7 +487,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                     
                         # Recursive retry with incremented count and new tokens
                         for retry_chunk in stream_agent_response_with_auth_detection(
-                                message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
+                                        message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
                         ):
                             yield retry_chunk
                         return
@@ -495,7 +495,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         error_msg = result.get('error', 'Unknown error')
                         logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
                         yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
-                        return
+                    return
                         
                 except Exception as e:
                     logger.error(f"❌ Exception during token exchange: {e}")

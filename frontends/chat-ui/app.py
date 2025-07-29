@@ -434,6 +434,23 @@ def debug_token():
     else:
         return jsonify({'error': 'No access token in session'}), 404
 
+@app.route('/api/clear-session', methods=['POST'])
+def clear_session():
+    """Clear session data (for cleanup script) - public endpoint"""
+    logger.info(f"🧹 Clearing session data")
+    
+    # Clear token cache for all users
+    global token_cache
+    if token_cache:
+        logger.info(f"🧹 Clearing token cache ({len(token_cache)} entries)")
+        token_cache.clear()
+    
+    # Clear session
+    session.clear()
+    logger.info(f"🧹 Session cleared")
+    
+    return jsonify({'success': True, 'message': 'Session and token cache cleared'})
+
 async def exchange_code_for_token(code: str, state: str, code_verifier: str) -> dict:
     """Exchange authorization code for access token"""
     try:
