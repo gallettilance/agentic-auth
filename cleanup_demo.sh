@@ -80,10 +80,15 @@ if [ "$KEYCLOAK_RUN_CONTAINER" = true ] ; then
         fi
     done
 
-    # Also remove any unnamed volumes that might be from Keycloak
-    echo -e "${YELLOW}🔄 Cleaning up dangling volumes...${NC}"
-    $CONTAINER_RUNTIME volume prune -f >/dev/null 2>&1 || true
-    echo -e "${GREEN}✅ Cleaned up dangling volumes${NC}"
+    # Clean up any demo-related Docker networks
+    echo -e "${YELLOW}🔄 Cleaning up demo Docker networks...${NC}"
+    $CONTAINER_RUNTIME network ls --filter name=keycloak --format "{{.ID}}" | xargs -r $CONTAINER_RUNTIME network rm 2>/dev/null || true
+    echo -e "${GREEN}✅ Cleaned up demo Docker networks${NC}"
+    
+    # Force remove any remaining Keycloak-related containers
+    echo -e "${YELLOW}🔄 Force removing any remaining Keycloak containers...${NC}"
+    $CONTAINER_RUNTIME ps -a -q -f name=keycloak | xargs -r $CONTAINER_RUNTIME rm -f 2>/dev/null || true
+    echo -e "${GREEN}✅ Force removed any remaining Keycloak containers${NC}"
 fi
 
 # Clean up databases
@@ -117,6 +122,39 @@ safe_remove "$SCRIPT_DIR/frontends/admin-dashboard/__pycache__/" "Python cache (
 safe_remove "$SCRIPT_DIR/mcp/__pycache__/" "Python cache (mcp)"
 safe_remove "$SCRIPT_DIR/services/__pycache__/" "Python cache (services)"
 
+# Clean up Flask session files
+echo ""
+echo -e "${YELLOW}🍪 Flask session cleanup:${NC}"
+find . -name "flask_session" -type d -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.session" -delete 2>/dev/null || true
+find . -name "*.db" -path "*/flask_session/*" -delete 2>/dev/null || true
+echo -e "${GREEN}✅ Flask session files cleared${NC}"
+
+# Clean up any temporary files
+echo ""
+echo -e "${YELLOW}🗂️  Temporary files cleanup:${NC}"
+find . -name "*.tmp" -delete 2>/dev/null || true
+find . -name "*.temp" -delete 2>/dev/null || true
+find . -name ".DS_Store" -delete 2>/dev/null || true
+echo -e "${GREEN}✅ Temporary files cleared${NC}"
+
+# Clean up any persistent storage that might be used by the app
+echo ""
+echo -e "${YELLOW}💾 Persistent storage cleanup:${NC}"
+safe_remove "$SCRIPT_DIR/.flask_session" "Flask session directory"
+safe_remove "$SCRIPT_DIR/frontends/chat-ui/.flask_session" "Chat UI Flask session"
+safe_remove "$SCRIPT_DIR/frontends/admin-dashboard/.flask_session" "Admin dashboard Flask session"
+safe_remove "$SCRIPT_DIR/auth-server/.flask_session" "Auth server Flask session"
+
+# Clear any SQLite databases that might contain session data
+find . -name "*.db" -not -path "./env/*" -not -path "./.git/*" -exec rm -f {} \; 2>/dev/null || true
+echo -e "${GREEN}✅ SQLite databases cleared${NC}"
+
+# Clear any JSON files that might contain session data
+find . -name "*.json" -path "*/session*" -delete 2>/dev/null || true
+find . -name "*.json" -path "*/cache*" -delete 2>/dev/null || true
+echo -e "${GREEN}✅ Session JSON files cleared${NC}"
+
 # Clean up Python egg-info and build artifacts
 echo ""
 echo -e "${YELLOW}🥚 Python package artifacts:${NC}"
@@ -136,6 +174,9 @@ echo -e "${GREEN}✅ Removed Python bytecode files${NC}"
 echo ""
 echo -e "${YELLOW}🌍 Environment cleanup:${NC}"
 safe_remove ".env.local" "local environment file"
+safe_remove ".env.production" "production environment file"
+safe_remove ".env.development" "development environment file"
+safe_remove "config.env" "config environment file"
 echo -e "${YELLOW}⚠️  Preserving virtual environment directory (env/)${NC}"
 
 # Chrome cookies cleanup
@@ -146,28 +187,101 @@ cleanup_chrome_cookies() {
     # Force quit Chrome first
     echo -e "${YELLOW}🔄 Force closing Chrome...${NC}"
     pkill -f "Google Chrome" 2>/dev/null || true
+    pkill -f "Chromium" 2>/dev/null || true
     sleep 2
     
     # Determine Chrome cookies path based on OS
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS Chrome cookies
         CHROME_COOKIES="$HOME/Library/Application Support/Google/Chrome/Default/Cookies"
+        CHROME_STORAGE="$HOME/Library/Application Support/Google/Chrome/Default/Local Storage"
+        CHROME_SESSION="$HOME/Library/Application Support/Google/Chrome/Default/Session Storage"
+        CHROME_INDEXED="$HOME/Library/Application Support/Google/Chrome/Default/IndexedDB"
+        CHROME_CACHE="$HOME/Library/Caches/Google/Chrome"
+        CHROME_APP_DATA="$HOME/Library/Application Support/Google/Chrome/Default"
     else
         # Linux Chrome cookies
         CHROME_COOKIES="$HOME/.config/google-chrome/Default/Cookies"
+        CHROME_STORAGE="$HOME/.config/google-chrome/Default/Local Storage"
+        CHROME_SESSION="$HOME/.config/google-chrome/Default/Session Storage"
+        CHROME_INDEXED="$HOME/.config/google-chrome/Default/IndexedDB"
+        CHROME_CACHE="$HOME/.cache/google-chrome"
+        CHROME_APP_DATA="$HOME/.config/google-chrome/Default"
     fi
     
     # Clear Chrome localhost cookies
     if [ -f "$CHROME_COOKIES" ] && command -v sqlite3 >/dev/null 2>&1; then
         echo -e "${YELLOW}🔄 Clearing Chrome localhost cookies...${NC}"
-        sqlite3 "$CHROME_COOKIES" "DELETE FROM cookies WHERE host_key LIKE '%localhost%' OR host_key LIKE '%.localhost%';" 2>/dev/null || true
+        sqlite3 "$CHROME_COOKIES" "DELETE FROM cookies WHERE host_key LIKE '%localhost%' OR host_key LIKE '%.localhost%' OR host_key LIKE '%127.0.0.1%';" 2>/dev/null || true
         echo -e "${GREEN}✅ Chrome localhost cookies cleared${NC}"
     else
         echo -e "${YELLOW}⚠️  Chrome cookies database not found or sqlite3 not available${NC}"
     fi
+    
+    # Clear Chrome local storage for localhost
+    if [ -d "$CHROME_STORAGE" ]; then
+        echo -e "${YELLOW}🔄 Clearing Chrome local storage...${NC}"
+        find "$CHROME_STORAGE" -name "*localhost*" -delete 2>/dev/null || true
+        find "$CHROME_STORAGE" -name "*127.0.0.1*" -delete 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome local storage cleared${NC}"
+    fi
+    
+    # Clear Chrome session storage for localhost
+    if [ -d "$CHROME_SESSION" ]; then
+        echo -e "${YELLOW}🔄 Clearing Chrome session storage...${NC}"
+        find "$CHROME_SESSION" -name "*localhost*" -delete 2>/dev/null || true
+        find "$CHROME_SESSION" -name "*127.0.0.1*" -delete 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome session storage cleared${NC}"
+    fi
+    
+    # Clear Chrome IndexedDB for localhost
+    if [ -d "$CHROME_INDEXED" ]; then
+        echo -e "${YELLOW}🔄 Clearing Chrome IndexedDB...${NC}"
+        find "$CHROME_INDEXED" -name "*localhost*" -delete 2>/dev/null || true
+        find "$CHROME_INDEXED" -name "*127.0.0.1*" -delete 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome IndexedDB cleared${NC}"
+    fi
+    
+    # Clear Chrome cache
+    if [ -d "$CHROME_CACHE" ]; then
+        echo -e "${YELLOW}🔄 Clearing Chrome cache...${NC}"
+        rm -rf "$CHROME_CACHE"/* 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome cache cleared${NC}"
+    fi
+    
+    # Clear Chrome application data for localhost
+    if [ -d "$CHROME_APP_DATA" ]; then
+        echo -e "${YELLOW}🔄 Clearing Chrome application data for localhost...${NC}"
+        find "$CHROME_APP_DATA" -name "*localhost*" -delete 2>/dev/null || true
+        find "$CHROME_APP_DATA" -name "*127.0.0.1*" -delete 2>/dev/null || true
+        echo -e "${GREEN}✅ Chrome application data cleared${NC}"
+    fi
 }
 
 cleanup_chrome_cookies
+
+# Force restart browsers to clear any remaining memory
+echo ""
+echo -e "${YELLOW}🔄 Force restarting browsers...${NC}"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS - force quit and restart Chrome
+    pkill -f "Google Chrome" 2>/dev/null || true
+    sleep 2
+    echo -e "${GREEN}✅ Browsers force-quit (restart manually if needed)${NC}"
+else
+    # Linux - force quit browsers
+    pkill -f "google-chrome" 2>/dev/null || true
+    sleep 2
+    echo -e "${GREEN}✅ Browsers force-quit (restart manually if needed)${NC}"
+fi
+
+# Clear any remaining memory/cache
+echo ""
+echo -e "${YELLOW}🧠 Memory/cache cleanup:${NC}"
+if command -v sync >/dev/null 2>&1; then
+    sync 2>/dev/null || true
+    echo -e "${GREEN}✅ File system synced${NC}"
+fi
 
 # Clean up any remaining demo processes
 echo ""

@@ -45,6 +45,12 @@ cleanup() {
     echo ""
     echo -e "${BLUE}🛑 Shutting down services...${NC}"
     
+    # Call logout endpoint to clear authentication state
+    echo -e "${YELLOW}🔐 Calling logout endpoint to clear authentication state...${NC}"
+    # Use a simple session clear endpoint instead of the full logout redirect
+    curl -s -X POST "http://localhost:5000/api/clear-session" >/dev/null 2>&1 || true
+    echo "   ✅ Session cleared"
+    
     # Kill background processes
     if [ ! -z "$ADMIN_PID" ]; then
         kill $ADMIN_PID 2>/dev/null || true

@@ -185,17 +185,55 @@ def get_llama_stack_token_info():
 
 @tokens_bp.route('/token-info')
 def get_token_info():
-    """Display current tokens - tokens should be automatically exchanged during login"""
+    """Get current token information for the dashboard"""
     if 'authenticated' not in session:
-        logger.warning("❌ Token info requested but user not authenticated")
         return jsonify({'error': 'Not authenticated'}), 401
     
     try:
-        # Get tokens from session (zero-trust: exchanged on-demand, not during login)
+        user_email = session.get('user_email')
         access_token = session.get('access_token')
         
+        logger.info(f"🔍 TOKEN INFO REQUEST for {user_email}")
+        
+        # Force refresh tokens from actual services if available
+        if user_email and user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            
+            # Force capture current Llama Stack token from client
+            if llama_client:
+                logger.info(f"🔍 Force capturing current Llama Stack token from client for {user_email}")
+                from utils.llama_agents_utils import capture_llama_stack_token_update
+                capture_llama_stack_token_update(user_email, llama_client, "dashboard_refresh")
+        
+        # Force refresh MCP token from cache/session
+        logger.info(f"🔍 Force refreshing MCP token for {user_email}")
+        from utils.mcp_tokens_utils import get_current_mcp_token, update_mcp_token_cache
+        
+        mcp_token = None
+        mcp_token_source = None
+        
+        if user_email:
+            current_mcp_token = get_current_mcp_token(user_email)
+            session_mcp_token = session.get('mcp_token')
+            
+            # Use the most recent MCP token (prefer cache over session)
+            if current_mcp_token:
+                mcp_token = current_mcp_token
+                mcp_token_source = "cache"
+                logger.info(f"🔍 Using MCP token from cache for {user_email}")
+            elif session_mcp_token:
+                mcp_token = session_mcp_token
+                mcp_token_source = "session"
+                # Update cache with session token
+                update_mcp_token_cache(user_email, session_mcp_token)
+                logger.info(f"🔍 Using MCP token from session and updated cache for {user_email}")
+            else:
+                logger.info(f"🔍 No MCP token available for {user_email}")
+        else:
+            logger.info(f"🔍 No user email available for MCP token refresh")
+        
         # Get Llama Stack token from cache first, then fallback to session
-        user_email = session.get('user_email')
         from utils.llama_agents_utils import get_current_llama_stack_token
         llama_stack_token = get_current_llama_stack_token(user_email) if user_email else None
         llama_stack_token_source = "cache" if llama_stack_token else None
@@ -215,18 +253,8 @@ def get_token_info():
         logger.info(f"   session['llama_stack_token']: type={type(session_llama_stack)}, value={session_llama_stack}")
         logger.info(f"   session['mcp_token']: type={type(session_mcp)}, value={session_mcp}")
         
-        # Get MCP token from cache first, then fallback to session
-        from utils.mcp_tokens_utils import get_current_mcp_token
-        mcp_token = get_current_mcp_token(user_email) if user_email else None
-        mcp_token_source = "cache" if mcp_token else None
-        
         # Debug: Log what we got from cache
         logger.info(f"🔍 DEBUG: MCP token from cache: type={type(mcp_token)}, value={mcp_token}")
-        
-        if not mcp_token:
-            mcp_token = session.get('mcp_token')
-            mcp_token_source = "session" if mcp_token else None
-            logger.info(f"🔍 DEBUG: MCP token from session: type={type(mcp_token)}, value={mcp_token}")
         
         # Debug: Compare cache vs session tokens for Llama Stack
         session_llama_stack_token = session.get('llama_stack_token')
@@ -298,68 +326,39 @@ def get_token_info():
             try:
                 import jwt
                 decoded = jwt.decode(token, options={"verify_signature": False})
-                # Log full token for debugging
-                logger.info(f"🎫 {token_type} token decoded: aud={decoded.get('aud')}, scope={decoded.get('scope')}, exp={decoded.get('exp')}")
-                
-                scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
-                
-                # Check if this is a minimal token (no service-specific scopes)
-                if token_type == 'MCP' and not any(scope.startswith('mcp:') for scope in scopes):
-                    status = 'minimal_scope'
-                    message = f'{token_type} token ready (minimal scope - MCP scopes will be acquired on-demand)'
-                elif token_type == 'Llama Stack' and not any(scope.startswith('llama:') for scope in scopes):
-                    status = 'minimal_scope'
-                    message = f'{token_type} token ready (minimal scope - Llama scopes will be acquired on-demand)'
-                else:
-                    status = 'available'
-                    message = f'{token_type} token ready for use'
+                scopes = decoded.get('scope', '').split()
+                audience = decoded.get('aud', audience_default)
                 
                 return {
                     'token': token,
-                    'audience': decoded.get('aud', audience_default),
+                    'audience': audience,
                     'scopes': scopes,
-                    'expires': decoded.get('exp'),
-                    'issued': decoded.get('iat'),
-                    'roles': decoded.get('realm_access', {}).get('roles', []),
-                    'status': status,
-                    'message': message
+                    'status': 'active',
+                    'message': f'✅ {token_type} token active with {len(scopes)} scopes'
                 }
             except Exception as e:
-                logger.error(f"❌ Error decoding {token_type} token: {e}")
-                logger.info(f"🎫 {token_type} token (raw): {token}")  # Log full token for debugging
+                logger.warning(f"⚠️ Could not decode {token_type} token: {e}")
                 return {
                     'token': token,
                     'audience': audience_default,
                     'scopes': [],
                     'status': 'invalid',
-                    'message': f'{token_type} token invalid: {str(e)}'
+                    'message': f'⚠️ {token_type} token could not be decoded'
                 }
         
-        # Get token information
-        logger.info(f"🔍 DEBUG: About to call get_token_info_helper with:")
-        logger.info(f"   llama_stack_token: type={type(llama_stack_token)}, value={llama_stack_token}")
-        logger.info(f"   mcp_token: type={type(mcp_token)}, value={mcp_token}")
-        
-        # Ensure tokens are strings
-        if llama_stack_token and not isinstance(llama_stack_token, str):
-            logger.warning(f"⚠️ Llama Stack token is not a string: {type(llama_stack_token)}")
-            llama_stack_token = str(llama_stack_token) if llama_stack_token else None
-            
-        if mcp_token and not isinstance(mcp_token, str):
-            logger.warning(f"⚠️ MCP token is not a string: {type(mcp_token)}")
-            mcp_token = str(mcp_token) if mcp_token else None
-        
-        llama_stack_info = get_token_info_helper(llama_stack_token, 'Llama Stack', LLAMA_STACK_CLIENT_ID)
-        mcp_info = get_token_info_helper(mcp_token, 'MCP', MCP_SERVER_CLIENT_ID)
-        
-        response_data = {
-            'llama_stack_token': llama_stack_info,
-            'mcp_token': mcp_info
+        # Format response
+        response = {
+            'access_token': get_token_info_helper(access_token, 'Access', 'authentication-demo'),
+            'llama_stack_token': get_token_info_helper(llama_stack_token, 'Llama Stack', 'authentication-demo'),
+            'mcp_token': get_token_info_helper(mcp_token, 'MCP', 'authentication-demo'),
+            'token_sources': {
+                'llama_stack': llama_stack_token_source,
+                'mcp': mcp_token_source
+            }
         }
         
-        logger.info(f"📊 Token status: llama_stack={llama_stack_info['status']}, mcp={mcp_info['status']}")
-        
-        return jsonify(response_data)
+        logger.info(f"🔍 Token info response prepared for {user_email}")
+        return jsonify(response)
         
     except Exception as e:
         logger.error(f"❌ Error getting token info: {e}")

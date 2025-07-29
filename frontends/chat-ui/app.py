@@ -61,8 +61,44 @@ if not all([OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET]):
     logger.error("❌ Missing required OIDC configuration. Please set OIDC_ISSUER_URL, OIDC_CLIENT_ID, and OIDC_CLIENT_SECRET")
     sys.exit(1)
 
-# Global variables for token management
+# Global token cache
 token_cache = {}  # Token cache by user email
+
+def clear_all_token_caches():
+    """Clear all global token caches - called during cleanup"""
+    global token_cache
+    
+    # Clear main token cache
+    if token_cache:
+        logger.info(f"🧹 Clearing main token cache ({len(token_cache)} entries)")
+        token_cache.clear()
+    
+    # Clear Llama Stack token cache but preserve history
+    try:
+        from utils.llama_agents_utils import llama_stack_tokens
+        if llama_stack_tokens:
+            logger.info(f"🧹 Clearing Llama Stack token cache ({len(llama_stack_tokens)} entries)")
+            llama_stack_tokens.clear()
+        # Note: We preserve llama_stack_token_history for dashboard display
+    except ImportError:
+        logger.warning("⚠️ Could not import Llama Stack token caches")
+    
+    # Clear MCP token cache
+    try:
+        from utils.mcp_tokens_utils import mcp_tokens
+        if mcp_tokens:
+            logger.info(f"🧹 Clearing MCP token cache ({len(mcp_tokens)} entries)")
+            mcp_tokens.clear()
+    except ImportError:
+        logger.warning("⚠️ Could not import MCP token cache")
+    
+    logger.info("🧹 All global token caches cleared (history preserved)")
+
+@app.route('/clear-caches', methods=['GET'])
+def clear_caches_endpoint():
+    """Public endpoint to clear all token caches - for cleanup script"""
+    clear_all_token_caches()
+    return "Token caches cleared", 200
 
 # Import API blueprints
 from api.chat import chat_bp
@@ -71,6 +107,19 @@ from api.tokens import tokens_bp
 # Register blueprints
 app.register_blueprint(chat_bp, url_prefix='/api')
 app.register_blueprint(tokens_bp, url_prefix='/api')
+
+@app.teardown_appcontext
+def cleanup_on_shutdown(exception=None):
+    """Clear token caches when app context is torn down"""
+    if exception:
+        logger.info(f"🧹 App context teardown with exception: {exception}")
+    else:
+        logger.info("🧹 App context teardown - clearing token caches")
+        clear_all_token_caches()
+
+# Handle graceful shutdown
+import atexit
+atexit.register(clear_all_token_caches)
 
 async def get_oidc_configuration():
     """Get OIDC configuration from discovery endpoint"""
@@ -434,22 +483,7 @@ def debug_token():
     else:
         return jsonify({'error': 'No access token in session'}), 404
 
-@app.route('/api/clear-session', methods=['POST'])
-def clear_session():
-    """Clear session data (for cleanup script) - public endpoint"""
-    logger.info(f"🧹 Clearing session data")
-    
-    # Clear token cache for all users
-    global token_cache
-    if token_cache:
-        logger.info(f"🧹 Clearing token cache ({len(token_cache)} entries)")
-        token_cache.clear()
-    
-    # Clear session
-    session.clear()
-    logger.info(f"🧹 Session cleared")
-    
-    return jsonify({'success': True, 'message': 'Session and token cache cleared'})
+
 
 async def exchange_code_for_token(code: str, state: str, code_verifier: str) -> dict:
     """Exchange authorization code for access token"""
