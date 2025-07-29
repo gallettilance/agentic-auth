@@ -96,11 +96,26 @@ def create_auth_error_response(error_details: dict, message: str, user_email: st
     required_scope = error_details.get('required_scope', tool_name)
     mcp_server_url = error_details.get('mcp_server_url')
     
+    logger.info(f"🔐 MCP AUTH ERROR for {user_email}")
+    logger.info(f"   Tool: {tool_name}")
+    logger.info(f"   Required scope: {required_scope}")
+    logger.info(f"   MCP server: {mcp_server_url}")
+    
     if not mcp_server_url:
         logger.error("❌ No MCP server URL found in error details - cannot create auth error response")
-        return f"❌ Authorization error: Cannot determine MCP server URL\n"
+        return f"❌ **Authorization Error**: {message}\n\n*Error details incomplete - please contact administrator.*"
     
-    return f"🔐 Authorization required for `{tool_name}` (scope: {required_scope})\n"
+    # Create a structured error response that the frontend can parse
+    error_response = f"""❌ **Authorization Error**: {message}
+
+**Tool**: `{tool_name}`
+**Required Scope**: `{required_scope}`
+**Server**: `{mcp_server_url}`
+
+The system will automatically attempt to acquire the required permissions."""
+    
+    logger.info(f"🔐 Created auth error response for {user_email}")
+    return error_response
 
 def stream_agent_response_with_auth_detection(message: str, bearer_token: str, user_email: str, original_message: str, auth_cookies: dict = {}, retry_count: int = 0, mcp_token: Optional[str] = None, access_token: Optional[str] = None):
     """Stream agent response with clean authorization error detection and automatic token exchange"""
@@ -231,9 +246,23 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         
                         logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
                         
-                        # Note: We can't store in session here due to context issues
-                        # The new token will be passed to the retry call and can be stored by the caller
-                        logger.info(f"✅ New MCP token obtained (will be stored by caller): {new_mcp_token[:20]}...")
+                        # Store the new token in cache and session
+                        try:
+                            from utils.mcp_tokens_utils import update_mcp_token_cache
+                            update_mcp_token_cache(user_email, new_mcp_token)
+                            logger.info(f"✅ Stored new MCP token in cache for {user_email}")
+                            
+                            # Also try to update Flask session if in request context
+                            try:
+                                from flask import session
+                                session['mcp_token'] = new_mcp_token
+                                logger.info(f"✅ Stored new MCP token in session for {user_email}")
+                            except RuntimeError:
+                                logger.info(f"✅ MCP token stored in cache (not in request context)")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not store new MCP token: {e}")
+                        
+                        logger.info(f"✅ New MCP token obtained and stored: {new_mcp_token[:20]}...")
                         
                         # Retry the original request with new token
                         yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
@@ -435,16 +464,30 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         
                         logger.info(f"✅ Successfully exchanged token for scope: {required_scope}")
                         
-                        # Note: We can't store in session here due to context issues
-                        # The new token will be passed to the retry call and can be stored by the caller
-                        logger.info(f"✅ New MCP token obtained (will be stored by caller): {new_mcp_token[:20]}...")
+                        # Store the new token in cache and session
+                        try:
+                            from utils.mcp_tokens_utils import update_mcp_token_cache
+                            update_mcp_token_cache(user_email, new_mcp_token)
+                            logger.info(f"✅ Stored new MCP token in cache for {user_email}")
+                            
+                            # Also try to update Flask session if in request context
+                            try:
+                                from flask import session
+                                session['mcp_token'] = new_mcp_token
+                                logger.info(f"✅ Stored new MCP token in session for {user_email}")
+                            except RuntimeError:
+                                logger.info(f"✅ MCP token stored in cache (not in request context)")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not store new MCP token: {e}")
+                        
+                        logger.info(f"✅ New MCP token obtained and stored: {new_mcp_token[:20]}...")
                         
                         # Retry the original request with new token
                         yield f"🔄 **Acquired permission for `{tool_name}` - retrying...**\n\n"
                     
                         # Recursive retry with incremented count and new tokens
                         for retry_chunk in stream_agent_response_with_auth_detection(
-                                    message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
+                                message, bearer_token, user_email, original_message, auth_cookies, retry_count + 1, new_mcp_token, access_token
                         ):
                             yield retry_chunk
                         return
@@ -452,7 +495,7 @@ def stream_agent_response_with_auth_detection(message: str, bearer_token: str, u
                         error_msg = result.get('error', 'Unknown error')
                         logger.error(f"❌ Keycloak token exchange failed: {error_msg}")
                         yield f"❌ Permission denied for `{tool_name}`. {error_msg}\n"
-                    return
+                        return
                         
                 except Exception as e:
                     logger.error(f"❌ Exception during token exchange: {e}")

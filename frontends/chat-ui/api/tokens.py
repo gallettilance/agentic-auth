@@ -115,29 +115,37 @@ def get_llama_stack_token_info():
         current_token = None
         client_message = "No LlamaStackClient available"
         
-        # Import the utils module to access the global user_agents
-        from utils.llama_agents_utils import user_agents
+        # Import the utils module to access the global user_agents and token cache
+        from utils.llama_agents_utils import user_agents, get_current_llama_stack_token
         
-        if user_email in user_agents:
-            user_data = user_agents[user_email]
-            llama_client = user_data.get('client')
+        # First try to get token from our cache (most up-to-date)
+        if user_email:
+            current_token = get_current_llama_stack_token(user_email)
+            if current_token:
+                client_message = "Token from LlamaStackClient cache (exchanged)"
+                logger.info(f"🔍 Retrieved current token from cache for {user_email}")
+            else:
+                current_token = None
+        else:
+            current_token = None
             
-            if llama_client:
-                try:
-                    # Query the client for its current token
-                    if hasattr(llama_client, 'get_current_token'):
-                        current_token = llama_client.get_current_token()
-                        client_message = "Token from LlamaStackClient"
-                        logger.info(f"🔍 Retrieved current token from LlamaStackClient for {user_email}")
-                    elif hasattr(llama_client, 'api_key'):
-                        current_token = llama_client.api_key
-                        client_message = "Token from LlamaStackClient.api_key"
-                        logger.info(f"🔍 Retrieved current token from LlamaStackClient.api_key for {user_email}")
-                    else:
-                        raise Exception("LlamaStackClient has no method to get current token")
-                except Exception as client_error:
-                    logger.warning(f"⚠️ Could not get token from LlamaStackClient: {client_error}")
-                    client_message = f"Error querying LlamaStackClient: {client_error}"
+                    # Fallback to querying the client directly
+            if user_email in user_agents:
+                user_data = user_agents[user_email]
+                llama_client = user_data.get('client')
+                
+                if llama_client:
+                    try:
+                        # Query the client for its current token using inspect_current_token()
+                        if hasattr(llama_client, 'inspect_current_token'):
+                            current_token = llama_client.inspect_current_token()
+                            client_message = "Token from LlamaStackClient.inspect_current_token()"
+                            logger.info(f"🔍 Retrieved current token from LlamaStackClient for {user_email}")
+                        else:
+                            raise Exception("LlamaStackClient has no inspect_current_token() method")
+                    except Exception as client_error:
+                        logger.warning(f"⚠️ Could not get token from LlamaStackClient: {client_error}")
+                        client_message = f"Error querying LlamaStackClient: {client_error}"
         
         # Fallback to session token if client query failed
         if not current_token:
@@ -162,7 +170,8 @@ def get_llama_stack_token_info():
             'token_length': len(current_token),
             'oauth2_enabled': True,
             'current_token': current_token,
-            'message': client_message
+            'message': client_message,
+            'can_capture': user_email in user_agents if user_email else False
         }
         
         logger.info(f"🔍 Llama Stack token info: has_token={token_info.get('has_token')}, token_type={token_info.get('token_type')}, source={client_message}")
@@ -183,10 +192,100 @@ def get_token_info():
     try:
         # Get tokens from session (zero-trust: exchanged on-demand, not during login)
         access_token = session.get('access_token')
-        llama_stack_token = session.get('llama_stack_token')
-        mcp_token = session.get('mcp_token')
         
-        logger.info(f"🔍 Displaying tokens for {session.get('user_email')}: access_token={bool(access_token)}, llama_stack_token={bool(llama_stack_token)}, mcp_token={bool(mcp_token)}")
+        # Get Llama Stack token from cache first, then fallback to session
+        user_email = session.get('user_email')
+        from utils.llama_agents_utils import get_current_llama_stack_token
+        llama_stack_token = get_current_llama_stack_token(user_email) if user_email else None
+        llama_stack_token_source = "cache" if llama_stack_token else None
+        
+        # Debug: Log what we got from cache
+        logger.info(f"🔍 DEBUG: Llama Stack token from cache: type={type(llama_stack_token)}, value={llama_stack_token}")
+        
+        if not llama_stack_token:
+            llama_stack_token = session.get('llama_stack_token')
+            llama_stack_token_source = "session" if llama_stack_token else None
+            logger.info(f"🔍 DEBUG: Llama Stack token from session: type={type(llama_stack_token)}, value={llama_stack_token}")
+        
+        # Debug: Check what's in session
+        session_llama_stack = session.get('llama_stack_token')
+        session_mcp = session.get('mcp_token')
+        logger.info(f"🔍 DEBUG: Session contents:")
+        logger.info(f"   session['llama_stack_token']: type={type(session_llama_stack)}, value={session_llama_stack}")
+        logger.info(f"   session['mcp_token']: type={type(session_mcp)}, value={session_mcp}")
+        
+        # Get MCP token from cache first, then fallback to session
+        from utils.mcp_tokens_utils import get_current_mcp_token
+        mcp_token = get_current_mcp_token(user_email) if user_email else None
+        mcp_token_source = "cache" if mcp_token else None
+        
+        # Debug: Log what we got from cache
+        logger.info(f"🔍 DEBUG: MCP token from cache: type={type(mcp_token)}, value={mcp_token}")
+        
+        if not mcp_token:
+            mcp_token = session.get('mcp_token')
+            mcp_token_source = "session" if mcp_token else None
+            logger.info(f"🔍 DEBUG: MCP token from session: type={type(mcp_token)}, value={mcp_token}")
+        
+        # Debug: Compare cache vs session tokens for Llama Stack
+        session_llama_stack_token = session.get('llama_stack_token')
+        if llama_stack_token and session_llama_stack_token and llama_stack_token != session_llama_stack_token:
+            logger.warning(f"⚠️ LLAMA STACK TOKEN MISMATCH for {user_email}")
+            logger.warning(f"   Cache token: {llama_stack_token[:20]}...")
+            logger.warning(f"   Session token: {session_llama_stack_token[:20]}...")
+            try:
+                import jwt
+                cache_decoded = jwt.decode(llama_stack_token, options={"verify_signature": False})
+                session_decoded = jwt.decode(session_llama_stack_token, options={"verify_signature": False})
+                cache_scopes = cache_decoded.get('scope', '').split()
+                session_scopes = session_decoded.get('scope', '').split()
+                logger.warning(f"   Cache scopes: {cache_scopes}")
+                logger.warning(f"   Session scopes: {session_scopes}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Could not decode Llama Stack tokens for comparison: {e}")
+        
+        # Debug: Compare cache vs session tokens for MCP
+        session_mcp_token = session.get('mcp_token')
+        if mcp_token and session_mcp_token and mcp_token != session_mcp_token:
+            logger.warning(f"⚠️ MCP TOKEN MISMATCH for {user_email}")
+            logger.warning(f"   Cache token: {mcp_token[:20]}...")
+            logger.warning(f"   Session token: {session_mcp_token[:20]}...")
+            try:
+                import jwt
+                cache_decoded = jwt.decode(mcp_token, options={"verify_signature": False})
+                session_decoded = jwt.decode(session_mcp_token, options={"verify_signature": False})
+                cache_scopes = cache_decoded.get('scope', '').split()
+                session_scopes = session_decoded.get('scope', '').split()
+                logger.warning(f"   Cache scopes: {cache_scopes}")
+                logger.warning(f"   Session scopes: {session_scopes}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Could not decode MCP tokens for comparison: {e}")
+        
+        if not mcp_token:
+            mcp_token = session.get('mcp_token')
+            mcp_token_source = "session" if mcp_token else None
+        
+        logger.info(f"🔍 Displaying tokens for {session.get('user_email')}: access_token={bool(access_token)}, llama_stack_token={bool(llama_stack_token)} (source: {llama_stack_token_source}), mcp_token={bool(mcp_token)} (source: {mcp_token_source})")
+        
+        # Log Llama Stack token details if available
+        if llama_stack_token:
+            try:
+                import jwt
+                decoded = jwt.decode(llama_stack_token, options={"verify_signature": False})
+                scopes = decoded.get('scope', '').split()
+                logger.info(f"🔍 Llama Stack token scopes: {scopes}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not decode Llama Stack token: {e}")
+        
+        # Log MCP token details if available
+        if mcp_token:
+            try:
+                import jwt
+                decoded = jwt.decode(mcp_token, options={"verify_signature": False})
+                scopes = decoded.get('scope', '').split()
+                logger.info(f"🔍 MCP token scopes: {scopes}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not decode MCP token: {e}")
         
         # Helper function to decode and format token info
         def get_token_info_helper(token, token_type, audience_default):
@@ -240,6 +339,19 @@ def get_token_info():
                 }
         
         # Get token information
+        logger.info(f"🔍 DEBUG: About to call get_token_info_helper with:")
+        logger.info(f"   llama_stack_token: type={type(llama_stack_token)}, value={llama_stack_token}")
+        logger.info(f"   mcp_token: type={type(mcp_token)}, value={mcp_token}")
+        
+        # Ensure tokens are strings
+        if llama_stack_token and not isinstance(llama_stack_token, str):
+            logger.warning(f"⚠️ Llama Stack token is not a string: {type(llama_stack_token)}")
+            llama_stack_token = str(llama_stack_token) if llama_stack_token else None
+            
+        if mcp_token and not isinstance(mcp_token, str):
+            logger.warning(f"⚠️ MCP token is not a string: {type(mcp_token)}")
+            mcp_token = str(mcp_token) if mcp_token else None
+        
         llama_stack_info = get_token_info_helper(llama_stack_token, 'Llama Stack', LLAMA_STACK_CLIENT_ID)
         mcp_info = get_token_info_helper(mcp_token, 'MCP', MCP_SERVER_CLIENT_ID)
         
@@ -368,8 +480,13 @@ def exchange_mcp_token_scope():
         if not required_scope:
             return jsonify({'error': 'No required_scope provided'}), 400
         
+        user_email = session.get('user_email')
         access_token = session.get('access_token')
         current_mcp_token = session.get('mcp_token')
+        
+        logger.info(f"🔄 MCP TOKEN EXCHANGE REQUEST for {user_email}")
+        logger.info(f"   Required scope: {required_scope}")
+        logger.info(f"   Current MCP token: {current_mcp_token[:20] + '...' if current_mcp_token else 'None'}")
         
         if not access_token:
             return jsonify({'error': 'No access token available'}), 400
@@ -385,14 +502,19 @@ def exchange_mcp_token_scope():
                 import jwt
                 decoded = jwt.decode(current_mcp_token, options={"verify_signature": False})
                 current_scopes = decoded.get('scope', '').split() if decoded.get('scope') else []
-            except Exception:
-                pass
+                logger.info(f"   Current scopes: {current_scopes}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Could not decode current token: {e}")
         
         # Add the required scope to current scopes
         if required_scope not in current_scopes:
             current_scopes.append(required_scope)
+            logger.info(f"   Requesting scopes: {current_scopes}")
+        else:
+            logger.info(f"   Scope {required_scope} already present")
         
         # Exchange token for new scopes
+        logger.info(f"   Calling Keycloak token exchange...")
         result = asyncio.run(exchange_token_for_audience(
             access_token=access_token,
             audience=OIDC_CLIENT_ID,  # Self-exchange
@@ -401,6 +523,14 @@ def exchange_mcp_token_scope():
         
         if result['success']:
             new_mcp_token = result['access_token'] # Use access_token from result
+            
+            logger.info(f"✅ MCP TOKEN EXCHANGE SUCCESS for {user_email}")
+            logger.info(f"   New token: {new_mcp_token[:20] + '...'}")
+            
+            # Update both cache and session
+            from utils.mcp_tokens_utils import update_mcp_token_cache
+            if user_email:
+                update_mcp_token_cache(user_email, new_mcp_token)
             session['mcp_token'] = new_mcp_token
             
             logger.info(f"🎫 Exchanged MCP token for {session.get('user_email')} with new scopes: {current_scopes}")
@@ -413,7 +543,8 @@ def exchange_mcp_token_scope():
             })
         else:
             # Let Keycloak's error message through - it will indicate if scope requires approval
-            logger.error(f"❌ Keycloak rejected scope '{required_scope}': {result.get('error')}")
+            logger.error(f"❌ MCP TOKEN EXCHANGE FAILED for {user_email}")
+            logger.error(f"   Keycloak rejected scope '{required_scope}': {result.get('error')}")
             return jsonify({
                 'success': False,
                 'error': result['error'],
@@ -690,3 +821,134 @@ def test_service_discovery():
             'success': False,
             'error': str(e)
         }), 500 
+
+@tokens_bp.route('/capture-llama-stack-token', methods=['POST'])
+def capture_llama_stack_token():
+    """Manually capture the current Llama Stack token from the client"""
+    if 'authenticated' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        user_email = session.get('user_email')
+        
+        # Import the utils module to access the global user_agents
+        from utils.llama_agents_utils import user_agents, capture_llama_stack_token_update
+        
+        if user_email and user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            
+            if llama_client:
+                # Attempt to capture the current token
+                success = capture_llama_stack_token_update(user_email, llama_client)
+                
+                if success:
+                    return jsonify({
+                        'success': True,
+                        'message': 'Llama Stack token captured and updated'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': 'Could not capture token from LlamaStackClient'
+                    }), 400
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'No LlamaStackClient available'
+                }), 400
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'No agent found for user'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"❌ Error capturing Llama Stack token: {e}")
+        return jsonify({'error': str(e)}), 500 
+
+@tokens_bp.route('/capture-mcp-token', methods=['POST'])
+def capture_mcp_token():
+    """Manually capture the current MCP token from session"""
+    if 'authenticated' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        user_email = session.get('user_email')
+        mcp_token = session.get('mcp_token')
+        
+        if user_email and mcp_token:
+            from utils.mcp_tokens_utils import update_mcp_token_cache
+            update_mcp_token_cache(user_email, mcp_token)
+            
+            return jsonify({
+                'success': True,
+                'message': 'MCP token captured and updated in cache'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'No MCP token available in session'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"❌ Error capturing MCP token: {e}")
+        return jsonify({'error': str(e)}), 500 
+
+@tokens_bp.route('/test-mcp-token-exchange', methods=['POST'])
+def test_mcp_token_exchange():
+    """Test endpoint to manually trigger MCP token exchange"""
+    if 'authenticated' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        data = request.get_json() or {}
+        required_scope = data.get('scope', 'mcp:list_files')
+        
+        logger.info(f"🧪 TEST MCP TOKEN EXCHANGE for {session.get('user_email')}")
+        logger.info(f"   Requesting scope: {required_scope}")
+        
+        # Get required tokens
+        access_token = session.get('access_token')
+        if not access_token:
+            return jsonify({'error': 'No access token available'}), 400
+        
+        if not OIDC_CLIENT_ID:
+            return jsonify({'error': 'OIDC client ID not configured'}), 500
+        
+        # Call the exchange endpoint
+        result = asyncio.run(exchange_token_for_audience(
+            access_token=access_token,
+            audience=OIDC_CLIENT_ID,
+            scopes=[required_scope]
+        ))
+        
+        if result['success']:
+            new_token = result['access_token']
+            
+            # Update both cache and session
+            from utils.mcp_tokens_utils import update_mcp_token_cache
+            user_email = session.get('user_email')
+            if user_email:
+                update_mcp_token_cache(user_email, new_token)
+            session['mcp_token'] = new_token
+            
+            logger.info(f"✅ TEST MCP TOKEN EXCHANGE SUCCESS")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Test MCP token exchange successful for scope: {required_scope}',
+                'token_preview': new_token[:20] + '...',
+                'scope': required_scope
+            })
+        else:
+            logger.error(f"❌ TEST MCP TOKEN EXCHANGE FAILED: {result.get('error')}")
+            return jsonify({
+                'success': False,
+                'error': result.get('error'),
+                'message': 'Test MCP token exchange failed'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"❌ Error in test MCP token exchange: {e}")
+        return jsonify({'error': str(e)}), 500 

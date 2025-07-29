@@ -50,6 +50,74 @@ user_agents = {}  # Dictionary to store per-user agents: {user_email: {'agent': 
 # Global cache for user sessions - simplified to store only session IDs per user
 user_sessions = {}  # {user_email: session_id}
 
+# Global token cache to track updated tokens from LlamaStackClient
+llama_stack_tokens = {}  # {user_email: current_token}
+
+def update_llama_stack_token(user_email: str, token: str):
+    """Update the Llama Stack token cache for a user"""
+    global llama_stack_tokens
+    llama_stack_tokens[user_email] = token
+    logger.info(f"🔄 Updated Llama Stack token cache for {user_email}")
+    
+    # Also try to update Flask session if in request context
+    try:
+        from flask import session
+        session['llama_stack_token'] = token
+        logger.info(f"🔄 Updated Flask session with Llama Stack token for {user_email}")
+    except RuntimeError:
+        # Not in request context, skip session update
+        logger.info(f"🔄 Llama Stack token updated (not in request context)")
+
+def get_current_llama_stack_token(user_email: str) -> Optional[str]:
+    """Get the current Llama Stack token for a user"""
+    global llama_stack_tokens
+    token = llama_stack_tokens.get(user_email)
+    
+    logger.debug(f"🔍 get_current_llama_stack_token for {user_email}: type={type(token)}, value={token}")
+    
+    if token:
+        logger.debug(f"🔍 Retrieved Llama Stack token from cache for {user_email}: {token[:20]}...")
+    else:
+        logger.debug(f"🔍 No Llama Stack token in cache for {user_email}")
+    
+    return token
+
+def capture_llama_stack_token_update(user_email: str, llama_client):
+    """Attempt to capture the current token from LlamaStackClient after potential exchange"""
+    try:
+        # Use the inspect_current_token() method
+        if hasattr(llama_client, 'inspect_current_token'):
+            try:
+                token_info = llama_client.inspect_current_token()
+                logger.info(f"🔍 Captured token info via inspect_current_token() for {user_email}")
+                logger.debug(f"🔍 inspect_current_token() returned: type={type(token_info)}, value={token_info}")
+                
+                if token_info and isinstance(token_info, dict):
+                    # Extract the actual token from the dictionary
+                    current_token = token_info.get('current_token')
+                    logger.debug(f"🔍 Extracted current_token: type={type(current_token)}, value={current_token}")
+                    
+                    if current_token and isinstance(current_token, str):
+                        update_llama_stack_token(user_email, current_token)
+                        logger.info(f"✅ Successfully captured Llama Stack token for {user_email}")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ No valid current_token in token_info: {current_token}")
+                        return False
+                else:
+                    logger.warning(f"⚠️ inspect_current_token() returned invalid format: {type(token_info)}")
+                    return False
+            except Exception as e:
+                logger.warning(f"inspect_current_token() failed for {user_email}: {e}")
+                return False
+        else:
+            logger.warning(f"LlamaStackClient has no inspect_current_token() method for {user_email}")
+            return False
+            
+    except Exception as e:
+        logger.warning(f"Error capturing LlamaStackClient token for {user_email}: {e}")
+        return False
+
 def get_or_create_user_agent(user_email: str, bearer_token: str):
     """Get or create a user-specific Llama Stack agent with per-user isolation"""
     global llama_client, user_agents
@@ -88,7 +156,13 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         if user_email in user_agents:
             user_data = user_agents[user_email]
             agent = user_data['agent']
+            llama_client = user_data.get('client')
             logger.info(f"🔄 Reusing existing agent for {user_email}")
+            
+            # Capture any token updates from the existing client
+            if llama_client:
+                logger.info(f"🔄 Capturing Llama Stack token from existing agent for {user_email}")
+                capture_llama_stack_token_update(user_email, llama_client)
             
             # MCP tokens will be generated on-demand when tools require them
             logger.info(f"🎫 MCP tokens will be generated on-demand when tools require them")
@@ -102,6 +176,9 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
         if not models:
             logger.error("❌ No models available")
             return None
+        
+        # Capture any token updates that may have occurred during the API call
+        capture_llama_stack_token_update(user_email, llama_client)
         
         model_id = models[0].identifier
         logger.info(f"🤖 Using model: {model_id}")
@@ -121,6 +198,10 @@ def get_or_create_user_agent(user_email: str, bearer_token: str):
             'client': llama_client,  # Store the client reference for token queries
             'created_at': time.time()
         }
+        
+        # Capture any token updates after agent creation
+        logger.info(f"🔄 Capturing Llama Stack token after agent creation for {user_email}")
+        capture_llama_stack_token_update(user_email, llama_client)
         
         logger.info(f"✅ Created new agent for {user_email}")
         
@@ -159,6 +240,15 @@ def get_or_create_session_for_user(user_email: str, bearer_token: str, conversat
         
         if existing_session_id:
             logger.info(f"🔍 Found cached session ID for {user_email}: {existing_session_id}")
+            
+            # Capture any token updates when reusing existing session
+            if user_email in user_agents:
+                user_data = user_agents[user_email]
+                llama_client = user_data.get('client')
+                if llama_client:
+                    logger.info(f"🔄 Capturing Llama Stack token when reusing session for {user_email}")
+                    capture_llama_stack_token_update(user_email, llama_client)
+            
             return agent, existing_session_id
         
         # Try to get session ID from Flask session if in request context
@@ -195,8 +285,15 @@ def get_or_create_session_for_user(user_email: str, bearer_token: str, conversat
             session.permanent = True  # Make session persistent
             logger.info(f"✅ Stored session ID in Flask session: {session_id}")
         except RuntimeError:
-            # Not in request context, cache storage is sufficient
             logger.info(f"🔄 Not in request context, session ID stored in cache only")
+        
+        # Capture any token updates after session creation
+        if user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            if llama_client:
+                logger.info(f"🔄 Capturing Llama Stack token after session creation for {user_email}")
+                capture_llama_stack_token_update(user_email, llama_client)
         
         logger.info(f"✅ Created new session for {user_email}: {session_id}")
         return agent, session_id
@@ -277,13 +374,21 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
                 })
                 logger.info(f"🔐 Configured MCP headers for {len(mcp_headers)} servers")
         
-        # Send to agent with streaming enabled
+        # Create the turn and get streaming response
         response = agent.create_turn(
             messages=[user_message],
             session_id=agent_session_id,
             stream=True,
             extra_headers=extra_headers
         )
+        
+        # Capture any token updates after create_turn ends
+        if user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            if llama_client:
+                logger.info(f"🔄 Capturing Llama Stack token after create_turn for {user_email}")
+                capture_llama_stack_token_update(user_email, llama_client)
         
         # Process the streaming response with simple iteration
         response_content = ""
@@ -328,6 +433,14 @@ def send_message_to_llama_stack(message: str, bearer_token: str, user_email: str
             response_content = "Response received but no content available"
         
         logger.info(f"✅ Agent response for {user_email}: {response_content[:100]}...")
+        
+        # Capture any token updates that may have occurred during the API call
+        if user_email in user_agents:
+            user_data = user_agents[user_email]
+            llama_client = user_data.get('client')
+            if llama_client:
+                logger.info(f"🔄 Capturing Llama Stack token after API call for {user_email}")
+                capture_llama_stack_token_update(user_email, llama_client)
         
         return {
             "success": True,
