@@ -1,6 +1,6 @@
 log_level = 9
 port = "8001"
-kubeconfig = "~/.kube/config"
+kubeconfig = # Add your kubeconfig full path
 list_output = "yaml"
 read_only = false
 disable_destructive = false
