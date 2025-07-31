@@ -26,10 +26,10 @@ TEST_USERS = [
 ]
 
 TEST_SCOPES = {
-    "mcp_basic": ["mcp:list_files", "mcp:health_check"],
-    "mcp_admin": ["mcp:execute_command"],
+    "mcp_basic": ["mcp:resources_list", "mcp:resources_get"],
+    "mcp_admin": ["mcp:resources_delete"],
     "llama_basic": ["llama:models:read", "llama:agents:read"],
-    "mixed": ["mcp:list_files", "llama:inference"]
+    "mixed": ["mcp:resources_list", "llama:inference"]
 }
 
 class TokenExchangeV2Tester:
@@ -218,7 +218,7 @@ class TokenExchangeV2Tester:
                     expected_denied = []
                     if user['expected_role'] == 'user':
                         # Users should be denied admin scopes
-                        expected_denied = [scope for scope in requested_scopes if 'execute_command' in scope]
+                        expected_denied = [scope for scope in requested_scopes if 'resources_delete' in scope]
                     
                     if expected_denied:
                         actually_granted = [scope for scope in expected_denied if scope in granted]
@@ -229,7 +229,7 @@ class TokenExchangeV2Tester:
                     print(f"     ❌ Failed: {error}")
                     
                     # Some failures are expected (e.g., user requesting admin scopes)
-                    if user['expected_role'] == 'user' and any('execute_command' in scope for scope in requested_scopes):
+                    if user['expected_role'] == 'user' and any('resources_delete' in scope for scope in requested_scopes):
                         print(f"     ℹ️ Expected failure: User role cannot access admin scopes")
                     else:
                         user_success = False
@@ -260,17 +260,17 @@ class TokenExchangeV2Tester:
         test_cases = [
             {
                 'name': 'Valid user scopes',
-                'scopes': ['mcp:list_files', 'mcp:health_check'],
+                'scopes': ['mcp:resources_list', 'mcp:resources_get'],
                 'should_succeed': True
             },
             {
                 'name': 'Admin-only scope (should fail for user)',
-                'scopes': ['mcp:execute_command'],
+                'scopes': ['mcp:resources_delete'],
                 'should_succeed': False
             },
             {
                 'name': 'Mixed valid and invalid scopes',
-                'scopes': ['mcp:list_files', 'mcp:execute_command'],
+                'scopes': ['mcp:resources_list', 'mcp:resources_delete'],
                 'should_succeed': False  # Should fail due to admin scope
             },
             {
@@ -321,7 +321,7 @@ class TokenExchangeV2Tester:
         # Exchange for MCP scopes
         exchange_result = self.exchange_token_for_scopes(
             auth_result['access_token'],
-            ['mcp:list_files', 'mcp:execute_command']
+            ['mcp:resources_list', 'mcp:resources_delete']
         )
         
         if not exchange_result['success']:
@@ -350,7 +350,7 @@ class TokenExchangeV2Tester:
         # Validate key properties
         checks = [
             ('Audience contains client ID', KEYCLOAK_CLIENT_ID in str(payload.get('aud', ''))),
-            ('Scope contains requested scopes', 'mcp:list_files' in payload.get('scope', '')),
+            ('Scope contains requested scopes', 'mcp:resources_list' in payload.get('scope', '')),
             ('Token type is Bearer', exchange_result['token_type'] == 'Bearer'),
             ('Token has expiration', payload.get('exp') is not None)
         ]
@@ -393,7 +393,7 @@ class TokenExchangeV2Tester:
                 'subject_token_type': 'urn:ietf:params:oauth:token-type:access_token',
                 'requested_token_type': 'urn:ietf:params:oauth:token-type:refresh_token',
                 'audience': KEYCLOAK_CLIENT_ID,
-                'scope': 'mcp:list_files'
+                'scope': 'mcp:resources_list'
             }
 
             auth_string = base64.b64encode(f"{KEYCLOAK_CLIENT_ID}:{KEYCLOAK_CLIENT_SECRET}".encode()).decode()

@@ -1,0 +1,23 @@
+log_level = 9
+port = "8001"
+kubeconfig = # Add your kubeconfig full path
+list_output = "yaml"
+read_only = false
+disable_destructive = false
+require_oauth = true
+authorization_url = "http://localhost:8002/realms/authentication-demo"
+jwks_url = "http://localhost:8002/protocol/openid-connect/certs"
+server_url = "authentication-demo"
+
+denied_resources = [
+    {group = "", version = "v1", kind = "ServiceAccount"},
+    {group = "", version = "v1", kind = "Secret"},
+    {group = "rbac.authorization.k8s.io", version = "v1"}
+]
+
+enabled_tools = [
+    "resources_list",
+    "resources_get",
+    "resources_create_or_update",
+    "resources_delete",
+]

@@ -12,7 +12,7 @@ A demonstration of **Keycloak-based authentication and authorization** using RFC
 
 **Services in the demo:**
 - Chat UI frontend with Keycloak authentication
-- MCP Server for file operations (with scope-based permissions)
+- MCP Server for Kubernetes Cluster operations (with scope-based permissions)
 - Llama Stack for AI agents (with scope-based permissions)
 
 ## Prerequisites
@@ -20,6 +20,8 @@ A demonstration of **Keycloak-based authentication and authorization** using RFC
 - **Docker** (for Keycloak)
 - **Python 3.8+**
 - **pip**
+- **go** (for Kubernetes MCP Server)
+- **git** (for Kubernetes MCP Server)
 
 ## Install Dependencies
 
@@ -29,6 +31,26 @@ pip install -r requirements.txt  # If requirements.txt exists
 # OR install manually:
 pip install requests flask authlib httpx fastmcp llama-stack-client
 ```
+
+### Kubernetes
+You need a Kubernetes Cluster to interact with.
+
+If there is any, just update the `kubeconfig` field in mcp_config.toml with the **full path of your kubeconfig**.
+
+If not, Kind can be used to provision a local Kubernetes Cluster.
+
+#### Kind Installation
+
+https://kind.sigs.k8s.io/docs/user/quick-start/
+
+#### Kind Kubernetes Creation
+
+```bash
+# Install a local Kind Kubernetes Cluster
+kind create cluster --name test
+```
+
+This typically creates a kubeconfig under `/home/$USER_NAME/.kube/config`.
 
 ## Run the Demo
 
@@ -52,7 +74,7 @@ pip install requests flask authlib httpx fastmcp llama-stack-client
 **Try it out:**
 1. Login to the chat UI
 2. Send messages to see AI agent responses
-3. Try file operations (uses MCP with dynamic token exchange)
+3. Try Kubernetes Cluster operations (uses MCP with dynamic token exchange)
 4. Notice how admin users can access additional commands
 
 ## Cleanup

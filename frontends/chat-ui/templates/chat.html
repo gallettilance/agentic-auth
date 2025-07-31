@@ -1000,7 +1000,7 @@
             <div class="message assistant">
                 <div class="message-avatar">🤖</div>
                 <div class="message-content">
-                    <strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you with:<ul><li>📁 File operations (reading, listing, searching files)</li><li>💻 System commands (when safe and appropriate)</li><li>📊 Data analysis and processing</li><li>❓ General questions and tasks</li></ul>What would you like to help you with today?
+                    <strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you interacting with your Kubernetes Cluster:<ul><li>📁 list resources in a namespace</li><li>💻 get details of a resource </li><li>📊 create kubernetes objects</li></ul>What would you like to help you with today?
                 </div>
             </div>
         </div>
@@ -1626,7 +1626,7 @@
                     messagesContainer.innerHTML = '';
                     
                     // Re-add welcome message first
-                    const welcomeMessage = `<div class="message assistant"><div class="message-avatar">🤖</div><div class="message-content"><strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you with:<ul><li>📁 File operations (reading, listing, searching files)</li><li>💻 System commands (when safe and appropriate)</li><li>📊 Data analysis and processing</li><li>❓ General questions and tasks</li></ul>What would you like to help you with today?</div></div>`;
+                    const welcomeMessage = `                    <strong>🤖 AI Assistant:</strong> Hello! I'm your AI assistant with access to various tools. I can help you interacting with your Kubernetes Cluster:<ul><li>📁 list resources in a namespace</li><li>💻 get details of a resource </li><li>📊 create kubernetes objects</li></ul>What would you like to help you with today?`;
                     messagesContainer.innerHTML = welcomeMessage;
                     
                     // Add each message to the chat
