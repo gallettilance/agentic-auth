@@ -14,7 +14,7 @@ export MCP_SERVER_URI=${MCP_SERVER_URI:-http://localhost:8001}
 export LLAMA_STACK_URL=${LLAMA_STACK_URL:-http://localhost:8321}
 export ADMIN_EMAIL=${ADMIN_EMAIL:-}
 export FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-"dev-secret-change-in-production"}
-export KUBERNETES_MCP_SERVER_DIR=${KUBERNETES_MCP_SERVER_DIR:-}
+export KUBERNETES_MCP_SERVER_DIR=${SCRIPT_DIR}/../kubernetes-mcp-server/
 
 export KEYCLOAK_IMAGE=${KEYCLOAK_IMAGE:-"quay.io/keycloak/keycloak:26.2"}
 
@@ -61,12 +61,6 @@ cleanup() {
     if [ ! -z "$MCP_PID" ]; then
         kill $MCP_PID 2>/dev/null || true
         echo "   ✅ MCP server stopped"
-    fi
-
-    if [ -n "$KMCP_DIR" ] && [ -z "$KUBERNETES_MCP_SERVER_DIR" ] && [ -d "$KMCP_DIR" ]; then
-        echo "   🧹 Cleaning up temporary kubernetes-mcp-server directory: $KMCP_DIR"
-        rm -rf "$KMCP_DIR"
-        echo "   ✅ Temporary directory cleaned up"
     fi
     
     if [ ! -z "$LLAMA_PID" ]; then
@@ -249,7 +243,7 @@ OIDC_ISSUER_URL=${OIDC_ISSUER_URL}
 OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
 OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
 
-KUBERNETES_MCP_SERVER_DIR=${KUBERNETES_MCP_SERVER_DIR}
+KUBERNETES_MCP_SERVER_DIR=${SCRIPT_DIR}/../kubernetes-mcp-server/
 
 # Service URLs
 MCP_SERVER_URI=${MCP_SERVER_URI}
@@ -360,6 +354,30 @@ fi
 
 echo -e "${GREEN}✅ Token Exchange V2 configuration validated${NC}"
 
+# Setup Kubernetes users to match Keycloak users
+echo -e "\n${BLUE}🔧 Setting up Kubernetes users...${NC}"
+if [ -n "$KUBECONFIG" ]; then
+    echo "   📁 Using KUBECONFIG: $KUBECONFIG"
+    if python "$SCRIPT_DIR/setup_k8s_users.py"; then
+        echo -e "${GREEN}✅ Kubernetes users setup completed${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Kubernetes users setup failed or skipped${NC}"
+        echo "   This is optional - the demo will work without Kubernetes integration"
+    fi
+elif [ -f "$HOME/.kube/config" ]; then
+    echo "   📁 Using default KUBECONFIG: $HOME/.kube/config"
+    export KUBECONFIG="$HOME/.kube/config"
+    if python "$SCRIPT_DIR/setup_k8s_users.py"; then
+        echo -e "${GREEN}✅ Kubernetes users setup completed${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Kubernetes users setup failed or skipped${NC}"
+        echo "   This is optional - the demo will work without Kubernetes integration"
+    fi
+else
+    echo -e "${YELLOW}⚠️ KUBECONFIG not set and no default config found - skipping Kubernetes user setup${NC}"
+    echo "   To enable Kubernetes integration, set KUBECONFIG environment variable"
+fi
+
 # Now start other services
 
 # Start Admin Dashboard Frontend
@@ -442,6 +460,17 @@ echo -e "${GREEN}✅ Self-Exchange Pattern:${NC}"
 echo "   • Single client: authentication-demo"
 echo "   • Simplified architecture with fine-grained scopes"
 echo "   • RFC 8693 compliant implementation"
+echo ""
+echo -e "${GREEN}✅ Kubernetes Integration:${NC}"
+if [ -n "$KUBECONFIG" ]; then
+    echo "   • Kubernetes users created to match Keycloak users"
+    echo "   • User role: default namespace access only"
+    echo "   • Admin role: cluster-wide access"
+    echo "   • MCP server can impersonate users based on Keycloak identity"
+else
+    echo "   • Kubernetes integration not enabled (KUBECONFIG not set)"
+    echo "   • To enable: export KUBECONFIG=/path/to/your/kubeconfig"
+fi
 
 echo -e "\n${BLUE}👥 Test Users:${NC}"
 echo "   🙋‍♂️ lance (password: password) - User role"

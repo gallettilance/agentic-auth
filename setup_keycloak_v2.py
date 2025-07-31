@@ -1300,6 +1300,111 @@ class KeycloakV2Setup:
         
         return True
 
+    def check_token_lifetimes(self) -> bool:
+        """Check current token lifetime settings"""
+        print(f"🔍 Checking current token lifetime settings...")
+        
+        response = requests.get(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}",
+            headers=self.headers
+        )
+        
+        if response.status_code == 200:
+            realm_config = response.json()
+            
+            print(f"📊 Current token lifetime settings:")
+            print(f"   - Access Token Lifespan: {realm_config.get('accessTokenLifespan', 'Not set')} seconds")
+            print(f"   - SSO Session Idle Timeout: {realm_config.get('ssoSessionIdleTimeout', 'Not set')} seconds")
+            print(f"   - SSO Session Max Lifespan: {realm_config.get('ssoSessionMaxLifespan', 'Not set')} seconds")
+            
+            # Convert to hours for readability
+            access_lifespan = realm_config.get('accessTokenLifespan', 0)
+            if access_lifespan > 0:
+                hours = access_lifespan / 3600
+                print(f"   - Access Token Lifespan: {hours:.1f} hours")
+            
+            return True
+        else:
+            print(f"❌ Failed to get realm settings: {response.status_code}")
+            return False
+
+    def configure_token_lifetimes(self) -> bool:
+        """Configure token lifetimes to reduce key rotation issues"""
+        print(f"🔄 Configuring token lifetimes...")
+        
+        # First get current realm configuration
+        response = requests.get(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}",
+            headers=self.headers
+        )
+        
+        if response.status_code != 200:
+            print(f"❌ Failed to get current realm config: {response.status_code}")
+            return False
+        
+        current_config = response.json()
+        
+        # Update only the token lifetime fields
+        current_config.update({
+            "accessTokenLifespan": 86400,  # 24 hours in seconds
+            "accessTokenLifespanForImplicitFlow": 86400,
+            "ssoSessionIdleTimeout": 86400,
+            "ssoSessionMaxLifespan": 86400,
+            "offlineSessionIdleTimeout": 86400,
+            "offlineSessionMaxLifespan": 86400
+        })
+        
+        # Update realm settings
+        response = requests.put(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM_NAME}",
+            headers=self.headers,
+            json=current_config
+        )
+        
+        if response.status_code == 204:
+            print(f"✅ Configured token lifetimes (24 hours)")
+            return True
+        else:
+            print(f"❌ Failed to configure token lifetimes: {response.status_code}")
+            if response.content:
+                print(f"   Error: {response.text}")
+            return False
+
+    def configure_key_rotation_settings(self) -> bool:
+        """Configure key rotation settings to reduce frequency"""
+        print(f"🔄 Configuring key rotation settings...")
+        
+        # Key rotation configuration
+        key_config = {
+            "realm": KEYCLOAK_REALM_NAME,
+            "keys": {
+                "active": {
+                    "algorithm": "RS256",
+                    "provider": "rsa-generated",
+                    "config": {
+                        "priority": ["100"],
+                        "kid": "auto-generated"
+                    }
+                }
+            },
+            "key_rotation": {
+                "enabled": True,
+                "interval": "P30D",  # Rotate every 30 days
+                "grace_period": "P7D"  # Keep old keys for 7 days
+            }
+        }
+        
+        # Note: Keycloak doesn't expose key rotation settings via REST API
+        # This would need to be configured manually in the admin console
+        # or via Keycloak configuration files
+        
+        print(f"ℹ️  Key rotation settings need manual configuration:")
+        print(f"   - Key rotation interval: 30 days")
+        print(f"   - Grace period: 7 days")
+        print(f"   - Configure in Keycloak Admin Console > Realm Settings > Keys")
+        
+        return True
+
     def run_complete_setup(self) -> bool:
         """Run the complete Token Exchange V2 setup"""
         print("🚀 Keycloak Token Exchange V2 - Complete Setup")
@@ -1320,6 +1425,9 @@ class KeycloakV2Setup:
             ("📦 Create authorization resources", self.create_authorization_resources),
             ("📜 Create authorization policies", self.create_authorization_policies),
             ("🛡️ Create scope permissions", self.create_scope_permissions),
+            ("⏰ Configure token lifetimes", self.configure_token_lifetimes),
+            ("🔑 Configure key rotation", self.configure_key_rotation_settings),
+            ("🔍 Check token lifetimes", self.check_token_lifetimes),
             ("👤 Create users", self.create_users),
             ("🔍 Debug roles and permissions", self.debug_user_roles_and_permissions),
             # ("⏸️ Manual token exchange setup", self.wait_for_manual_token_exchange_setup),
